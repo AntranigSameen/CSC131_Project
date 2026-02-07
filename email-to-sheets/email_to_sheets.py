@@ -8,19 +8,34 @@ import pyzmail
 import gspread
 from google.oauth2.service_account import Credentials
 
+# =====================
+# Load environment vars
+# =====================
 load_dotenv()
 
-IMAP_HOST = os.getenv("IMAP_HOST", "imap.gmail.com")
-IMAP_USER = os.getenv("IMAP_USER")
-IMAP_PASS = os.getenv("IMAP_PASS")
+IMAP_HOST = os.getenv("IMAP_HOST", os.getenv("IMAP_SERVER", "imap.gmail.com"))
+IMAP_USER = os.getenv("IMAP_USER", os.getenv("EMAIL_ADDRESS"))
+IMAP_PASS = os.getenv("IMAP_PASS", os.getenv("EMAIL_PASSWORD"))
 IMAP_FOLDER = os.getenv("IMAP_FOLDER", "INBOX")
-IMAP_SEARCH = os.getenv("IMAP_SEARCH", "UNSEEN")
+
+# Always make IMAP_SEARCH a list
+IMAP_SEARCH_RAW = os.getenv("IMAP_SEARCH", "").strip()
+if IMAP_SEARCH_RAW:
+    IMAP_SEARCH = IMAP_SEARCH_RAW.split()
+else:
+    IMAP_SEARCH = ["UNSEEN"]
+
+IMAP_FROM = os.getenv("EMAIL_FROM", "").strip()
+if IMAP_FROM:
+    IMAP_SEARCH += ["FROM", IMAP_FROM]
 
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Leads")
 SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
 
-
+# =====================
+# Helpers
+# =====================
 def extract_fields(text: str) -> dict:
     clean = (text or "").replace("\r", "")
 
@@ -40,7 +55,12 @@ def extract_fields(text: str) -> dict:
         name = m.group(1).strip()
 
     notes = clean[:400].strip()
-    return {"name": name, "email": email, "phone": phone, "notes": notes}
+    return {
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "notes": notes,
+    }
 
 
 def get_worksheet():
@@ -49,11 +69,13 @@ def get_worksheet():
 
     if not os.path.exists(SERVICE_ACCOUNT_JSON):
         raise FileNotFoundError(
-            f"Missing {SERVICE_ACCOUNT_JSON}. Put it in email-to-sheets/ folder."
+            f"Missing {SERVICE_ACCOUNT_JSON}. Put it in email-to-sheets folder."
         )
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_JSON, scopes=scopes)
+    creds = Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_JSON, scopes=scopes
+    )
     gc = gspread.authorize(creds)
 
     sh = gc.open_by_key(SPREADSHEET_ID)
@@ -63,19 +85,31 @@ def get_worksheet():
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=WORKSHEET_NAME, rows=1000, cols=20)
 
-    # Header row if empty
-    if ws.get_all_values() == []:
-        ws.append_row(["TimestampUTC", "From", "Subject", "Name", "Email", "Phone", "Notes", "MessageId"])
+    if not ws.get_all_values():
+        ws.append_row([
+            "TimestampUTC",
+            "From",
+            "Subject",
+            "Name",
+            "Email",
+            "Phone",
+            "Notes",
+            "MessageId",
+        ])
 
     return ws
 
-
+# =====================
+# Main
+# =====================
 def main():
-    # Quick visibility (safe)
     print("Loaded env:")
+    print("  IMAP_HOST =", IMAP_HOST)
     print("  IMAP_USER =", "set" if IMAP_USER else None)
     print("  SPREADSHEET_ID =", "set" if SPREADSHEET_ID else None)
     print("  SERVICE_ACCOUNT_JSON =", SERVICE_ACCOUNT_JSON)
+    print("  IMAP_FOLDER =", IMAP_FOLDER)
+    print("  IMAP_SEARCH =", IMAP_SEARCH)
 
     if not IMAP_USER or not IMAP_PASS:
         raise RuntimeError("Missing IMAP_USER or IMAP_PASS in .env")
@@ -90,6 +124,7 @@ def main():
         print(f"Found {len(uids)} matching emails with IMAP_SEARCH={IMAP_SEARCH!r}")
 
         for uid in uids:
+            # ✅ FIXED: no uid=True argument
             raw = server.fetch([uid], ["RFC822"])[uid][b"RFC822"]
             msg = pyzmail.PyzMessage.factory(raw)
 
@@ -113,22 +148,20 @@ def main():
                 datetime.now(timezone.utc).isoformat(),
                 from_str,
                 subject,
-                fields.get("name") or "",
-                fields.get("email") or "",
-                fields.get("phone") or "",
-                fields.get("notes") or "",
-                message_id
+                fields["name"] or "",
+                fields["email"] or "",
+                fields["phone"] or "",
+                fields["notes"] or "",
+                message_id,
             ])
 
-            server.add_flags(uid, [b"\\Seen"])
+            server.add_flags([uid], [b"\\Seen"])
             print(f"✅ Appended row for UID {uid} / subject: {subject}")
 
     print("Done.")
 
-
+# =====================
+# Entry point
+# =====================
 if __name__ == "__main__":
-    main()
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
+    raise SystemExit(main())
