@@ -1,0 +1,23 @@
+# Python virtual environments
+.venv/
+
+# Environment files
+.env
+*.env
+
+# Google service account (keep out of VCS)
+service_account.json
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# Logs
+*.log
+
+# IDE/editor folders
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
