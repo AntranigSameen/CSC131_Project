@@ -1,11 +1,12 @@
 import os
 import re
-from datetime import datetime, timezone
-
-from dotenv import load_dotenv
-from imapclient import IMAPClient
+import time
 import pyzmail
 import gspread
+
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+from imapclient import IMAPClient
 from google.oauth2.service_account import Credentials
 
 # =====================
@@ -177,4 +178,16 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    INTERVAL = 10  # IN SECONDS - how often to check for new emails
+    next_run = time.time()
+
+    while True:
+        try:
+            main()
+        except Exception as e:
+            print(f"Error: {e}")
+
+        next_run += INTERVAL
+        sleep_time = max(0, next_run - time.time())
+        print(f"Waiting {sleep_time:.2f} seconds before next check...\n")
+        time.sleep(sleep_time)
