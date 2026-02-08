@@ -1,8 +1,8 @@
 import os
 import re
-import time
 import pyzmail
 import gspread
+import time
 
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -186,6 +186,8 @@ if __name__ == "__main__":
             main()
         except Exception as e:
             print(f"Error: {e}")
+
+#in case of error, wait and retry instead of crashing
 
         next_run += INTERVAL
         sleep_time = max(0, next_run - time.time())
