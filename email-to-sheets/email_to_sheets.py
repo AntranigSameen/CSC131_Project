@@ -1,9 +1,16 @@
+#=================
+# Imports
+#=================
+
 import os
 import re
 import pyzmail
 import gspread
 import time
+import logging
+import sys
 
+from pathlib import Path
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from imapclient import IMAPClient
@@ -12,6 +19,7 @@ from google.oauth2.service_account import Credentials
 # =====================
 # Load environment vars
 # =====================
+
 load_dotenv()
 
 IMAP_HOST = os.getenv("IMAP_HOST", os.getenv("IMAP_SERVER", "imap.gmail.com"))
@@ -103,8 +111,28 @@ def get_worksheet():
 
     return ws
 
+# Logging info to a file
+
+def setup_logging():
+    if getattr(sys, "frozen", False):
+        base_dir = Path(sys.executable).parent      # when ran as executable
+    else:
+        base_dir = Path(__file__).parent            # when ran as script
+
+    log_file = base_dir / "email_to_sheets.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+        ],
+    )
+
+    logging.info("Logging initialized. Log file: %s", log_file)
 
 def main():
+    logging.info("Starting email to sheets processing...")
     print("Loaded env:")
     print("  IMAP_HOST =", IMAP_HOST)
     print("  IMAP_USER =", "set" if IMAP_USER else None)
@@ -123,6 +151,7 @@ def main():
         server.select_folder(IMAP_FOLDER)
 
         uids = server.search(IMAP_SEARCH)
+        logging.info(f"Found {len(uids)} matching emails with IMAP_SEARCH={IMAP_SEARCH!r}")     #Logs the number of matching emails found.
         print(f"Found {len(uids)} matching emails with IMAP_SEARCH={IMAP_SEARCH!r}")
 
         for uid in uids:
@@ -174,22 +203,22 @@ def main():
             server.add_flags([uid], [b"\\Seen"])
             print(f"✅ Appended row for UID {uid} / subject: {subject} / from: {from_str}")
 
-    print("Done.")
+    logging.info("Done processing emails.")
 
 
 if __name__ == "__main__":
+    setup_logging()
     INTERVAL = 10  # IN SECONDS - how often to check for new emails
-    next_run = time.time()
+    
+    try:
+        while True:
+            try:
+                main()
+            except Exception:
+                logging.exception("Error in main loop...")
 
-    while True:
-        try:
-            main()
-        except Exception as e:
-            print(f"Error: {e}")
+            logging.info("Waiting for %s seconds before checking for new emails...", INTERVAL)
+            time.sleep(INTERVAL)
 
-#in case of error, wait and retry instead of crashing
-
-        next_run += INTERVAL
-        sleep_time = max(0, next_run - time.time())
-        print(f"Waiting {sleep_time:.2f} seconds before next check...\n")
-        time.sleep(sleep_time)
+    except KeyboardInterrupt:
+        logging.info("Stopped by user")
