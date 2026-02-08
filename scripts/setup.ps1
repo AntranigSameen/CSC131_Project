@@ -15,5 +15,6 @@ pip install msal requests python-dotenv
 pip install gspread google-auth google-auth-oauthlib google-auth-httplib2
 pip install imapclient
 pip install pyzmail36
+pip install gspread
 
 Write-Host "Setup complete ✅"
