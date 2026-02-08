@@ -18,13 +18,14 @@ IMAP_USER = os.getenv("IMAP_USER", os.getenv("EMAIL_ADDRESS"))
 IMAP_PASS = os.getenv("IMAP_PASS", os.getenv("EMAIL_PASSWORD"))
 IMAP_FOLDER = os.getenv("IMAP_FOLDER", "INBOX")
 
-# Always make IMAP_SEARCH a list
+# Always make IMAP_SEARCH a list (default: UNSEEN)
 IMAP_SEARCH_RAW = os.getenv("IMAP_SEARCH", "").strip()
 if IMAP_SEARCH_RAW:
     IMAP_SEARCH = IMAP_SEARCH_RAW.split()
 else:
     IMAP_SEARCH = ["UNSEEN"]
 
+# Optional filter by sender
 IMAP_FROM = os.getenv("EMAIL_FROM", "").strip()
 if IMAP_FROM:
     IMAP_SEARCH += ["FROM", IMAP_FROM]
@@ -33,11 +34,18 @@ SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Leads")
 SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
 
-# =====================
-# Helpers
-# =====================
+
 def extract_fields(text: str) -> dict:
+    """
+    Normalize email body so Google Sheets doesn't split it across columns:
+    - tabs -> spaces (tabs cause column splitting)
+    - newlines -> spaces (keep notes in one cell)
+    - collapse repeated whitespace
+    """
     clean = (text or "").replace("\r", "")
+    clean = clean.replace("\t", " ")
+    clean = clean.replace("\n", " ")
+    clean = re.sub(r"\s+", " ", clean).strip()
 
     email = None
     m = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", clean, re.I)
@@ -54,13 +62,8 @@ def extract_fields(text: str) -> dict:
     if m:
         name = m.group(1).strip()
 
-    notes = clean[:400].strip()
-    return {
-        "name": name,
-        "email": email,
-        "phone": phone,
-        "notes": notes,
-    }
+    notes = clean[:400]
+    return {"name": name, "email": email, "phone": phone, "notes": notes}
 
 
 def get_worksheet():
@@ -73,9 +76,7 @@ def get_worksheet():
         )
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_JSON, scopes=scopes
-    )
+    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_JSON, scopes=scopes)
     gc = gspread.authorize(creds)
 
     sh = gc.open_by_key(SPREADSHEET_ID)
@@ -85,23 +86,23 @@ def get_worksheet():
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=WORKSHEET_NAME, rows=1000, cols=20)
 
+    # Header row in the exact order your sheet needs (only if empty)
     if not ws.get_all_values():
         ws.append_row([
-            "TimestampUTC",
-            "From",
-            "Subject",
-            "Name",
-            "Email",
-            "Phone",
-            "Notes",
-            "MessageId",
-        ])
+            "EMAIL",
+            "First Name",
+            "Last Name",
+            "Phone Number",
+            "Course",
+            "Date",
+            "Acuity Registered",
+            "AHA Registered",
+            "Reminder Email Sent",
+        ], value_input_option="RAW")
 
     return ws
 
-# =====================
-# Main
-# =====================
+
 def main():
     print("Loaded env:")
     print("  IMAP_HOST =", IMAP_HOST)
@@ -124,7 +125,7 @@ def main():
         print(f"Found {len(uids)} matching emails with IMAP_SEARCH={IMAP_SEARCH!r}")
 
         for uid in uids:
-            # ✅ FIXED: no uid=True argument
+            # IMAPClient 3.1.0: no uid=True kwarg
             raw = server.fetch([uid], ["RFC822"])[uid][b"RFC822"]
             msg = pyzmail.PyzMessage.factory(raw)
 
@@ -144,24 +145,36 @@ def main():
 
             fields = extract_fields(body)
 
-            ws.append_row([
-                datetime.now(timezone.utc).isoformat(),
-                from_str,
-                subject,
-                fields["name"] or "",
-                fields["email"] or "",
-                fields["phone"] or "",
-                fields["notes"] or "",
-                message_id,
-            ])
+            # Split full name into first/last for your sheet
+            full_name = (fields.get("name") or "").strip()
+            first_name, last_name = "", ""
+            if full_name:
+                parts = full_name.split()
+                first_name = parts[0]
+                last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
 
+            # Match your exact sheet order:
+            # EMAIL, First Name, Last Name, Phone Number, Course, Date, Acuity Registered, AHA Registered, Reminder Email Sent
+            row = [
+                fields.get("email") or "",      # EMAIL (from message body)
+                first_name,                      # First Name
+                last_name,                       # Last Name
+                fields.get("phone") or "",       # Phone Number
+                "",                              # Course
+                "",                              # Date
+                "Yes",                           # Acuity Registered (or "" if you prefer)
+                "",                              # AHA Registered
+                "",                              # Reminder Email Sent
+            ]
+
+            ws.append_row(row, value_input_option="RAW")
+
+            # Mark as seen so it won't be processed again
             server.add_flags([uid], [b"\\Seen"])
-            print(f"✅ Appended row for UID {uid} / subject: {subject}")
+            print(f"✅ Appended row for UID {uid} / subject: {subject} / from: {from_str}")
 
     print("Done.")
 
-# =====================
-# Entry point
-# =====================
+
 if __name__ == "__main__":
     raise SystemExit(main())
