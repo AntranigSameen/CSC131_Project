@@ -16,5 +16,6 @@ pip install gspread google-auth google-auth-oauthlib google-auth-httplib2
 pip install imapclient
 pip install pyzmail36
 pip install gspread
+pip install pyinstaller
 
 Write-Host "Setup complete ✅"

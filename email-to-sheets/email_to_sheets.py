@@ -67,9 +67,15 @@ def extract_fields(text: str) -> dict:
         phone = m.group(0)
 
     name = None
-    m = re.search(r"\bName:\s*(.+)", clean, re.I)
+    m = re.search(r"\bname\s*:\s*((?:[A-Za-z]+)(?:\s+[A-Za-z]+)*)", clean, re.IGNORECASE)
     if m:
-        name = m.group(1).strip()
+    # Keep only alphabetic words to avoid weird characters in names, and limit to 3 words max
+        words = m.group(1).split()
+        valid_words = [
+            w for w in words
+            if w.isalpha() and 2 <= len(w) <= 15
+        ]
+    name = " ".join(valid_words[:3])
 
     notes = clean[:400]
     return {"name": name, "email": email, "phone": phone, "notes": notes}
