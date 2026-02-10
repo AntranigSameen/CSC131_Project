@@ -34,7 +34,7 @@ if IMAP_SEARCH_RAW:
 else:
     IMAP_SEARCH = ["UNSEEN"]
 
-# Optional filter by sender
+# Filter by sender
 IMAP_FROM = os.getenv("EMAIL_FROM", "").strip()
 if IMAP_FROM:
     IMAP_SEARCH += ["FROM", IMAP_FROM]
@@ -65,6 +65,18 @@ def extract_fields(text: str) -> dict:
     m = re.search(r"(\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}", clean)
     if m:
         phone = m.group(0)
+    
+    date_found = None
+    m = re.search(r"\bdate\s*:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", clean, re.IGNORECASE)
+    if m:
+        date_found = m.group(1)                                             # Look for "Date: MM/DD/YYYY" pattern first
+    else:
+        # Try to find any date in MM/DD/YYYY or MM-DD-YYYY format
+        m = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b", clean)        # If no "Date:" label, look for any date pattern in the text
+        if m:
+            date_found = m.group(0)
+    
+
 
     name = None
     m = re.search(r"\bname\s*:\s*((?:[A-Za-z]+)(?:\s+[A-Za-z]+)*)", clean, re.IGNORECASE)
@@ -78,7 +90,7 @@ def extract_fields(text: str) -> dict:
     name = " ".join(valid_words[:3])
 
     notes = clean[:400]
-    return {"name": name, "email": email, "phone": phone, "notes": notes}
+    return {"name": name, "email": email, "phone": phone, "date": date_found, "notes": notes}
 
 
 def get_worksheet():
@@ -101,7 +113,7 @@ def get_worksheet():
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=WORKSHEET_NAME, rows=1000, cols=20)
 
-    # Header row in the exact order your sheet needs (only if empty)
+    # Header row in the exact order the sheet needs (only if empty)
     if not ws.get_all_values():
         ws.append_row([
             "EMAIL",
@@ -180,8 +192,9 @@ def main():
                 body = re.sub(r"<[^>]+>", " ", html)
 
             fields = extract_fields(body)
+            logging.info("extracted fields from email UID %s: %s", uid, fields)         # logs the extracted fields from the email
 
-            # Split full name into first/last for your sheet
+            # Split full name into first/last
             full_name = (fields.get("name") or "").strip()
             first_name, last_name = "", ""
             if full_name:
@@ -189,16 +202,16 @@ def main():
                 first_name = parts[0]
                 last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
 
-            # Match your exact sheet order:
+            # Match exact sheet order:
             # EMAIL, First Name, Last Name, Phone Number, Course, Date, Acuity Registered, AHA Registered, Reminder Email Sent
             row = [
-                fields.get("email") or "",      # EMAIL (from message body)
+                fields.get("email") or "",       # EMAIL (from message body)
                 first_name,                      # First Name
                 last_name,                       # Last Name
                 fields.get("phone") or "",       # Phone Number
                 "",                              # Course
-                "",                              # Date
-                "Yes",                           # Acuity Registered (or "" if you prefer)
+                fields.get("date") or "",        # Date
+                "Yes",                           # Acuity Registered
                 "",                              # AHA Registered
                 "",                              # Reminder Email Sent
             ]
