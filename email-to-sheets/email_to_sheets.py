@@ -212,8 +212,8 @@ def main():
                 "",                              # Course
                 fields.get("date") or "",        # Date
                 "Yes",                           # Acuity Registered
-                "",                              # AHA Registered
-                "",                              # Reminder Email Sent
+                "Yes",                           # AHA Registered
+                "No",                            # Reminder Email Sent
             ]
 
             ws.append_row(row, value_input_option="RAW")
