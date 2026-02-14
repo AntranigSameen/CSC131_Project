@@ -75,7 +75,7 @@ def extract_fields(text: str) -> dict:
         m = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b", clean)        # If no "Date:" label, look for any date pattern in the text
         if m:
             date_found = m.group(0)
-    
+
 
 
     name = None

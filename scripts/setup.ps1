@@ -17,5 +17,6 @@ pip install imapclient
 pip install pyzmail36
 pip install gspread
 pip install pyinstaller
+pip install flask msal requests
 
 Write-Host "Setup complete ✅"
