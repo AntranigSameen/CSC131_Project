@@ -1,0 +1,8 @@
+Accessing Google Account
+  Email: csc131bot@gmail.com
+  Password: me=8a$6QOs6?
+
+  API Key for Sheets: AIzaSyCcIfm115dWbf4JDKthSBda-LV2om4O284
+
+  Any changes that need to be made can be done so at
+  https://console.cloud.google.com/home/dashboard?project=lofty-root-488318-b3
