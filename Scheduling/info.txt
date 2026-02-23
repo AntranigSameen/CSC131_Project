@@ -2,7 +2,8 @@ Accessing Google Account
   Email: csc131bot@gmail.com
   Password: me=8a$6QOs6?
 
-  API Key for Sheets: AIzaSyCcIfm115dWbf4JDKthSBda-LV2om4O284
+  To use sceduling.py you need to edit line 8 to be the file path of the API Key on your computer:
+    creds = ServiceAccountCredentials.from_json_keyfile_name(r"  The location of the apikey.json  ", scope)
 
   Any changes that need to be made can be done so at
   https://console.cloud.google.com/home/dashboard?project=lofty-root-488318-b3
