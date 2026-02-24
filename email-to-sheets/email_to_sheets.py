@@ -1,48 +1,42 @@
-#=================
-# Imports
-#=================
+# =================
+# Outlook -> Sheets (Graph)
+# =================
 
 import os
 import re
-import pyzmail
-import gspread
 import time
 import logging
 import sys
-
 from pathlib import Path
-from datetime import datetime, timezone
+from typing import Dict, Any, List
+
+import requests
+import gspread
 from dotenv import load_dotenv
-from imapclient import IMAPClient
 from google.oauth2.service_account import Credentials
 
+
+from authentication import authenticate  # uses your locked device-flow auth.py
 # =====================
 # Load environment vars
 # =====================
 
 load_dotenv()
 
-IMAP_HOST = os.getenv("IMAP_HOST", os.getenv("IMAP_SERVER", "imap.gmail.com"))
-IMAP_USER = os.getenv("IMAP_USER", os.getenv("EMAIL_ADDRESS"))
-IMAP_PASS = os.getenv("IMAP_PASS", os.getenv("EMAIL_PASSWORD"))
-IMAP_FOLDER = os.getenv("IMAP_FOLDER", "INBOX")
+PROVIDER = (os.getenv("EMAIL_PROVIDER") or "").strip().lower()
+SENDER_EMAIL = (os.getenv("SENDER_EMAIL") or "").strip()  # used to filter messages (optional)
 
-# Always make IMAP_SEARCH a list (default: UNSEEN)
-IMAP_SEARCH_RAW = os.getenv("IMAP_SEARCH", "").strip()
-if IMAP_SEARCH_RAW:
-    IMAP_SEARCH = IMAP_SEARCH_RAW.split()
-else:
-    IMAP_SEARCH = ["UNSEEN"]
-
-# Filter by sender
-IMAP_FROM = os.getenv("EMAIL_FROM", "").strip()
-if IMAP_FROM:
-    IMAP_SEARCH += ["FROM", IMAP_FROM]
-
+# Google Sheets settings
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Leads")
 SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
 
+GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+
+
+# ---------------
+# Helpers
+# ---------------
 
 def extract_fields(text: str) -> dict:
     """
@@ -56,41 +50,55 @@ def extract_fields(text: str) -> dict:
     clean = clean.replace("\n", " ")
     clean = re.sub(r"\s+", " ", clean).strip()
 
+    # Email
     email = None
     m = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", clean, re.I)
     if m:
         email = m.group(0)
 
+    # Phone
     phone = None
     m = re.search(r"(\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}", clean)
     if m:
         phone = m.group(0)
-    
+
+    # Date (tries "Date: MM/DD/YYYY" first, then any MM/DD/YYYY or MM-DD-YYYY)
     date_found = None
     m = re.search(r"\bdate\s*:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", clean, re.IGNORECASE)
     if m:
-        date_found = m.group(1)                                             # Look for "Date: MM/DD/YYYY" pattern first
+        date_found = m.group(1)
     else:
-        # Try to find any date in MM/DD/YYYY or MM-DD-YYYY format
-        m = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b", clean)        # If no "Date:" label, look for any date pattern in the text
+        m = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b", clean)
         if m:
             date_found = m.group(0)
 
-
-
+    # Name
     name = None
     m = re.search(r"\bname\s*:\s*((?:[A-Za-z]+)(?:\s+[A-Za-z]+)*)", clean, re.IGNORECASE)
     if m:
-    # Keep only alphabetic words to avoid weird characters in names, and limit to 3 words max
         words = m.group(1).split()
-        valid_words = [
-            w for w in words
-            if w.isalpha() and 2 <= len(w) <= 15
-        ]
-    name = " ".join(valid_words[:3])
+        valid_words = [w for w in words if w.isalpha() and 2 <= len(w) <= 15]
+        name = " ".join(valid_words[:3]) if valid_words else None
 
     notes = clean[:400]
     return {"name": name, "email": email, "phone": phone, "date": date_found, "notes": notes}
+
+
+def setup_logging():
+    if getattr(sys, "frozen", False):
+        base_dir = Path(sys.executable).parent
+    else:
+        base_dir = Path(__file__).parent
+
+    log_file = base_dir / "email_to_sheets.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[logging.FileHandler(log_file, encoding="utf-8"),
+                  logging.StreamHandler(sys.stdout)],
+    )
+    logging.info("Logging initialized. Log file: %s", log_file)
 
 
 def get_worksheet():
@@ -115,120 +123,136 @@ def get_worksheet():
 
     # Header row in the exact order the sheet needs (only if empty)
     if not ws.get_all_values():
-        ws.append_row([
-            "EMAIL",
-            "First Name",
-            "Last Name",
-            "Phone Number",
-            "Course",
-            "Date",
-            "Acuity Registered",
-            "AHA Registered",
-            "Reminder Email Sent",
-        ], value_input_option="RAW")
+        ws.append_row(
+            [
+                "EMAIL",
+                "First Name",
+                "Last Name",
+                "Phone Number",
+                "Course",
+                "Date",
+                "Acuity Registered",
+                "AHA Registered",
+                "Reminder Email Sent",
+            ],
+            value_input_option="RAW",
+        )
 
     return ws
 
-# Logging info to a file
+def graph_get(token: str, url: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    r = requests.get(url, headers=headers, params=params, timeout=30)
+    if not r.ok:
+        raise RuntimeError(f"GET failed {r.status_code}: {r.text}")
+    return r.json()
 
-def setup_logging():
-    if getattr(sys, "frozen", False):
-        base_dir = Path(sys.executable).parent      # when ran as executable
-    else:
-        base_dir = Path(__file__).parent            # when ran as script
+def graph_patch(token: str, url: str, body: Dict[str, Any]) -> None:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    r = requests.patch(url, headers=headers, json=body, timeout=30)
+    if not r.ok:
+        # show the real Graph error message
+        raise RuntimeError(f"PATCH failed {r.status_code}: {r.text}")
 
-    log_file = base_dir / "email_to_sheets.log"
+def fetch_unread_messages(token: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """
+    Fetch unread messages from Inbox. If SENDER_EMAIL is set, filter to that sender in Python
+    (more reliable than Graph nested $filter).
+    """
+    url = f"{GRAPH_BASE}/me/mailFolders/Inbox/messages"
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-        ],
-    )
+    params: Dict[str, Any] = {
+        "$top": str(limit),
+        "$orderby": "receivedDateTime desc",
+        "$filter": "isRead eq false",
+        "$select": "id,subject,receivedDateTime,from,bodyPreview",
+    }
 
-    logging.info("Logging initialized. Log file: %s", log_file)
+    data = graph_get(token, url, params=params)
+    msgs = data.get("value", []) or []
+
+    if SENDER_EMAIL:
+        sender_lower = SENDER_EMAIL.lower()
+        def sender_addr(m: Dict[str, Any]) -> str:
+            return (m.get("from", {}) or {}).get("emailAddress", {}).get("address", "") or ""
+        msgs = [m for m in msgs if sender_addr(m).lower() == sender_lower]
+
+    return msgs
+
+
+def message_sender_address(msg: Dict[str, Any]) -> str:
+    try:
+        return msg.get("from", {}).get("emailAddress", {}).get("address", "") or ""
+    except Exception:
+        return ""
+
+
+# ---------------
+# Main
+# ---------------
 
 def main():
-    logging.info("Starting email to sheets processing...")
-    print("Loaded env:")
-    print("  IMAP_HOST =", IMAP_HOST)
-    print("  IMAP_USER =", "set" if IMAP_USER else None)
-    print("  SPREADSHEET_ID =", "set" if SPREADSHEET_ID else None)
-    print("  SERVICE_ACCOUNT_JSON =", SERVICE_ACCOUNT_JSON)
-    print("  IMAP_FOLDER =", IMAP_FOLDER)
-    print("  IMAP_SEARCH =", IMAP_SEARCH)
+    if PROVIDER != "outlook":
+        raise RuntimeError("EMAIL_PROVIDER must be 'outlook' (this script is Outlook-only).")
 
-    if not IMAP_USER or not IMAP_PASS:
-        raise RuntimeError("Missing IMAP_USER or IMAP_PASS in .env")
+    logging.info("Starting Outlook(Graph) -> Sheets processing...")
 
     ws = get_worksheet()
 
-    with IMAPClient(IMAP_HOST, ssl=True) as server:
-        server.login(IMAP_USER, IMAP_PASS)
-        server.select_folder(IMAP_FOLDER)
+    # Authenticate once per cycle (your auth caches)
+    token = authenticate()
+    if not token:
+        raise RuntimeError("Authentication failed: no access token returned.")
 
-        uids = server.search(IMAP_SEARCH)
-        logging.info(f"Found {len(uids)} matching emails with IMAP_SEARCH={IMAP_SEARCH!r}")     #Logs the number of matching emails found.
-        print(f"Found {len(uids)} matching emails with IMAP_SEARCH={IMAP_SEARCH!r}")
+    msgs = fetch_unread_messages(token, limit=25)
+    logging.info("Found %d unread messages (sender filter=%r)", len(msgs), SENDER_EMAIL)
+    print(f"Found {len(msgs)} unread messages (sender filter={SENDER_EMAIL!r})")
 
-        for uid in uids:
-            # IMAPClient 3.1.0: no uid=True kwarg
-            raw = server.fetch([uid], ["RFC822"])[uid][b"RFC822"]
-            msg = pyzmail.PyzMessage.factory(raw)
+    for msg in msgs:
+        msg_id = msg.get("id")
+        subject = msg.get("subject") or ""
+        sender = message_sender_address(msg)
+        body_preview = msg.get("bodyPreview") or ""
 
-            subject = msg.get_subject() or ""
-            from_list = msg.get_addresses("from")
-            from_str = from_list[0][1] if from_list else ""
-            message_id = msg.get_decoded_header("message-id") or str(uid)
+        fields = extract_fields(body_preview)
+        logging.info("Extracted fields from msg %s: %s", msg_id, fields)
 
-            body = ""
-            if msg.text_part:
-                charset = msg.text_part.charset or "utf-8"
-                body = msg.text_part.get_payload().decode(charset, errors="replace")
-            elif msg.html_part:
-                charset = msg.html_part.charset or "utf-8"
-                html = msg.html_part.get_payload().decode(charset, errors="replace")
-                body = re.sub(r"<[^>]+>", " ", html)
+        # Split full name into first/last
+        full_name = (fields.get("name") or "").strip()
+        first_name, last_name = "", ""
+        if full_name:
+            parts = full_name.split()
+            first_name = parts[0]
+            last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
 
-            fields = extract_fields(body)
-            logging.info("extracted fields from email UID %s: %s", uid, fields)         # logs the extracted fields from the email
+        row = [
+            fields.get("email") or "",
+            first_name,
+            last_name,
+            fields.get("phone") or "",
+            "",  # Course
+            fields.get("date") or "",
+            "Yes",  # Acuity Registered
+            "Yes",  # AHA Registered
+            "No",   # Reminder Email Sent
+        ]
 
-            # Split full name into first/last
-            full_name = (fields.get("name") or "").strip()
-            first_name, last_name = "", ""
-            if full_name:
-                parts = full_name.split()
-                first_name = parts[0]
-                last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
+        ws.append_row(row, value_input_option="RAW")
 
-            # Match exact sheet order:
-            # EMAIL, First Name, Last Name, Phone Number, Course, Date, Acuity Registered, AHA Registered, Reminder Email Sent
-            row = [
-                fields.get("email") or "",       # EMAIL (from message body)
-                first_name,                      # First Name
-                last_name,                       # Last Name
-                fields.get("phone") or "",       # Phone Number
-                "",                              # Course
-                fields.get("date") or "",        # Date
-                "Yes",                           # Acuity Registered
-                "Yes",                           # AHA Registered
-                "No",                            # Reminder Email Sent
-            ]
+        # Mark as read so it won't be processed again
+        if msg_id:
+            graph_patch(token, f"{GRAPH_BASE}/me/messages/{msg_id}", {"isRead": True})
 
-            ws.append_row(row, value_input_option="RAW")
-
-            # Mark as seen so it won't be processed again
-            server.add_flags([uid], [b"\\Seen"])
-            print(f"✅ Appended row for UID {uid} / subject: {subject} / from: {from_str}")
-
-    logging.info("Done processing emails.")
+        print(f"✅ Appended row / subject: {subject} / from: {sender}")
 
 
 if __name__ == "__main__":
     setup_logging()
-    INTERVAL = 10  # IN SECONDS - how often to check for new emails
-    
+    INTERVAL = int(os.getenv("INTERVAL", "10"))
+
     try:
         while True:
             try:

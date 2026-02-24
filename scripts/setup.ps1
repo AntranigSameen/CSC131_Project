@@ -13,9 +13,8 @@ python -m pip install --upgrade pip
 Write-Host "Installing packages..."
 pip install msal requests python-dotenv
 pip install gspread google-auth google-auth-oauthlib google-auth-httplib2
-pip install imapclient
-pip install pyzmail36
-pip install gspread
+##pip install imapclient
+##pip install pyzmail36
 pip install pyinstaller
 pip install flask msal requests
 
