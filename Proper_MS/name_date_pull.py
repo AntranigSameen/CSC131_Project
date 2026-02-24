@@ -25,15 +25,15 @@ if not SENDER_EMAIL:
 def get_from_email(access_token, keyword):
     headers = { "Authorization": f"Bearer {access_token}" }
 
-    # Removed $orderby because combining $filter on nested fields and $orderby causes InefficientFilter
-    url = f"https://graph.microsoft.com/v1.0/me/messages?$filter=from/emailAddress/address eq '{SENDER_EMAIL}'"
+
+    url = f"https://graph.microsoft.com/v1.0/me/mailFolders/Inbox/messages" f"?$filter=from/emailAddress/address eq '{SENDER_EMAIL}' and isRead eq false"     # Filter for unread emails from the specified sender
 
     response = requests.get(url, headers=headers)
 
     if response.status_code == 200:
         emails = response.json().get("value", [])
 
-        # Sort emails by receivedDateTime in Python (newest first)
+        # Sort emails by receivedDateTime (newest first)
         emails_sorted = sorted(emails, key=lambda x: x.get("receivedDateTime", ""), reverse=True)
 
         return emails_sorted

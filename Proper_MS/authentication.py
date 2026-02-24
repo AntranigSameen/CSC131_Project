@@ -16,7 +16,7 @@ load_dotenv()
 CLIENT_ID = os.getenv("CLIENT_ID")
 AUTHORITY = os.getenv("AUTHORITY", "https://login.microsoftonline.com/consumers")
 SCOPES_RAW = os.getenv("SCOPES")
-CACHE_FILE = os.getenv("CACHE_FILE", "token_cache.json")                 # Cache file for MSAL tokens (makes it a single sign-on experience)
+CACHE_FILE = os.getenv("CACHE_FILE", "token_cache.json")                                            # Cache file for MSAL tokens (makes it a single sign-on experience)
 
 #====================================
 # Check loaded environment variables
@@ -68,6 +68,6 @@ def authenticate():
         logging.info("Authentication successful.")                                                  # Log successful authentication
         return result["access_token"]
 
-    logging.error("Authentication failed: %s", result)                     # Log the error description for debugging
+    logging.error("Authentication failed: %s", result)                                              # Log the error description for debugging
     return None
     
