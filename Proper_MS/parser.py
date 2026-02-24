@@ -4,8 +4,11 @@
 
 import re
 
-# Pattern for matching dates in various formats (e.g., MM/DD/YYYY, DD-MM-YYYY, etc.)
-DATE_PATTERNS = r"\b(?:0?[1-9]|[12][0-9]|3[01])[-/](?:0?[1-9]|1[0-2])[-/](?:\d{2}|\d{4})\b"
+#============
+# DATE REGEX
+#============
+
+DATE_PATTERNS = r"(\d{1,2})[-/](\d{1,2})[-/](\d{2}|\d{4})"                                  # Patterns (e.g., MM/DD/YYYY, DD-MM-YYYY)
 
 #=============
 # Data Parser
@@ -20,8 +23,10 @@ def parse_name(emails, keyword):
         subject = email.get("subject", "No Subject")
 
         if keyword in content:
-            value = content.split(keyword, 1)[1].strip().split()[0]       # Extract the value following the keyword
-            results.append({"Subject": subject, "Value": value})
+            value = re.sub(r'<.*?>', '', content.split(keyword, 1)[1].strip())              # Remove HTML tags if present
+            text_value = re.match(r'\w+', value).group()                                    # Extract only word characters for cleaner output
+            
+            results.append({"Subject": subject, "Name": text_value})
     return results
 
 # Parses email content to extract dates
@@ -34,5 +39,5 @@ def parse_date(emails):
 
         match = re.search(DATE_PATTERNS, content)
         if match:
-            results.append({"Subject": subject, "Value": match.group()})
+            results.append({"Subject": subject, "Date": match.group()})
     return results
