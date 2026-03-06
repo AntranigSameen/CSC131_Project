@@ -19,7 +19,12 @@ def sign_in_visible(page) -> bool:  # page = current browser tab, PlayWright obj
                 pass
     return False
 
-def main():
+def aha_login_check():
+
+    if logined_in_file.exists():
+        print(f"Found existing login state file: {logined_in_file}")
+        return
+
     print(f"save state to: {logined_in_file}")
 
     with sync_playwright() as p:
@@ -84,5 +89,5 @@ def main():
         browser.close()
         raise RuntimeError("Login not detected within 3 minutes. Screenshot: setup_timeout.png")
 
-if __name__ == "__main__":
-    main()
+#if __name__ == "__main__":
+#    main()

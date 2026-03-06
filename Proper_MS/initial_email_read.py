@@ -6,7 +6,7 @@ import os
 import time
 import logging
 
-from authentication import authenticate
+from outlook_authentication import authenticate
 from run_helper import run_cycle
 from dotenv import load_dotenv
 
@@ -22,7 +22,7 @@ INTERVAL = int(os.getenv("INTERVAL", "10"))                                     
 # Set up Logging with Log File
 # =============================
 
-logging.basicConfig(filename="app.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(filename="Log Name Date Initial.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ==========
 # MAIN LOOP

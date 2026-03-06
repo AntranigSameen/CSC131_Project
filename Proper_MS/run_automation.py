@@ -72,7 +72,7 @@ def refresh_extracted_data_file_from_email(debug: bool = True) -> tuple[bool, bo
     Returns (ran, had_new_email).
     """
     try:
-        from authentication import authenticate
+        from Proper_MS.outlook_authentication import authenticate
         from run_helper import run_cycle
     except Exception as e:
         if debug:
@@ -1581,7 +1581,7 @@ def main():
     - PAUSE_AT_END=0
     """
     headless = _env_flag("HEADLESS", "0")
-    print(
+    print(                                                               
         "Starting run_automation... "
         f"EMAIL_REFRESH_ON_START={int(EMAIL_REFRESH_ON_START)} "
         f"FORCE_RUN={int(FORCE_RUN)} "

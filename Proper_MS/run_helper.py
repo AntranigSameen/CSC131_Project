@@ -24,11 +24,14 @@ KEYWORD_NAME = os.getenv("KEYWORD_NAME")
 # Pulls Emails, Filters Unread Emails, Parses Name and Date, Logs, Stores in a txt
 
 def run_cycle(token):
-            # Pull emails and filter for new/unread ones
-            emails = get_from_email(token, KEYWORD_NAME)
+            emails = get_from_email(token, KEYWORD_NAME)                                                         # Pull emails and filter for new/unread ones
+
+            ret_name = None
+            ret_date = None
 
             if not emails:
                 logging.info("No new emails found in this cycle.")                                               # Log if there are no new emails to process
+
             else:
                 name_parsed = parse_name(emails, KEYWORD_NAME)                                                   # Parse names from emails
                 if name_parsed:
@@ -54,4 +57,7 @@ def run_cycle(token):
                 mark_emails_seen(token, emails)
 
                 emails.clear()                                                                                   # Clear the list of processed emails to avoid reprocessing in the next cycle
-                return f"{ret_name},{ret_date}"                                                                  # Return parsed data for Sherri separated by a comma
+                if ret_name and ret_date:
+                     return f"{ret_name},{ret_date}"                                                             # Return parsed data for Sherri separated by a comma
+                else:
+                    return None                                                                                  # Return None if parsing was unsuccessful
