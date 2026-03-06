@@ -21,3 +21,7 @@ __pycache__/
 
 # OS files
 .DS_Store
+
+
+# google sheets api key
+google_sheets_api_key.json
