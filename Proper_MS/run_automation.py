@@ -1548,7 +1548,8 @@ def run_demo(name, date, headless: bool = False):
 
             if PAUSE_AT_END and not headless:
                 print("\nBrowser will stay open.")
-                input("Press ENTER to close the browser :D ")
+                if sys.stdin and sys.stdin.isatty():
+                    input("Press ENTER to close the browser :D ")
 
         except Exception as e:
             # Only capture screenshots when something goes wrong

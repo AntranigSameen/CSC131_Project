@@ -3,9 +3,11 @@
 #==========
 
 import os
+import sys
 import tkinter as tk
 from tkinter import messagebox
 from utils import resource_path
+import logging
 from dotenv import set_key, load_dotenv
 
 #============================
@@ -23,6 +25,7 @@ load_dotenv(CONFIG_FILE)
 def save_settings(entries):
     for key, var in entries.items():
         set_key(CONFIG_FILE, key, var.get())
+    logging.info("Settings saved successfully")                                                                                 # Logs when changes are saved
     messagebox.showinfo("Saved", "Settings saved successfully!")
 
     from dotenv import load_dotenv
@@ -38,7 +41,8 @@ def open_settings():
     entries = {}
 
     editable_variables= ['CLIENT_ID', 'TENANT_ID', 'AUTHORITY', 'SCOPES', 'CACHE_FILE', 'SENDER_EMAIL',                         # All Editable Variables
-                         'KEYWORD_NAME', 'INTERVAL', 'SERVICE_ACCOUNT_JSON', 'GOOGLE_SHEET_URL', 'ORG_NAME']
+                         'KEYWORD_NAME', 'INTERVAL', 'SERVICE_ACCOUNT_JSON', 'GOOGLE_SHEET_URL',
+                         'IS_HEADLESS', 'ORG_NAME']
     
     for var in editable_variables:
         tk.Label(root, text=var).pack(anchor="w", padx=10)

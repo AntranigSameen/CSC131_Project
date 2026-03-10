@@ -3,9 +3,11 @@
 #==========
 
 import os
+import sys
 import time
 import logging
 import threading
+import subprocess
 
 from pystray import Icon, MenuItem as item, Menu
 from PIL import Image
@@ -16,7 +18,7 @@ from setup_login import aha_login_check
 from outlook_authentication import authenticate
 from run_helper import run_cycle
 from run_automation import run_demo
-from utils import resource_path
+from utils import resource_path, log_file, base_dir
 
 from dotenv import load_dotenv
 
@@ -24,23 +26,31 @@ from dotenv import load_dotenv
 # Load Environment Variables
 #============================
 
-load_dotenv()
+load_dotenv(resource_path(".env"))
 
 INTERVAL = int(os.getenv("INTERVAL", "10"))                                                 # Default to 10 seconds if not set
+#IS_HEADLESS = bool(os.getenv("IS_HEADLESS", False))
 
 # =============================
 # Set up Logging with Log File
 # =============================
 
-os.makedirs("logs", exist_ok=True)
-logging.basicConfig(filename="logs/app.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(filename=log_file(), level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-#===================
+# =======================================
+# Set up Global Variable and Pause Event
+# =======================================
+
+automation_paused = False
+pause_event = threading.Event()
+pause_event.set()                                                                           # start unpaused
+
+#==================
 # AUTOMATION LOGIC
-#===================
+#==================
 
 def automation_loop():
-    logging.info("Starting the Master Control Script...")                                   # Log the start of the master control script
+    logging.info("Starting the Automation Script...")                                       # Log the start of the master control script
 
     aha_login_check()                                                                       # check if the user has logged in to AHA, if not, open a browser window for them to log in
     logging.info("AHA login check complete.")                                               # Log the completion of AHA login check
@@ -53,6 +63,8 @@ def automation_loop():
 
     # Run the main cycle of parsing emails and automation. log Errors.
     while True:
+        pause_event.wait()                                                                  # Pauses here when automation paused
+
         load_dotenv(override=True)                                                          # Reload env variables in case user edited them
         interval = int(os.getenv("INTERVAL", "10"))
 
@@ -82,23 +94,53 @@ def automation_loop():
 
 # Stop the tray icon
 def on_quit(icon, item):
+    logging.info("Exiting Application through System Tray Menu")
     icon.stop()
     os._exit(0)
 
-# Start GUI
+# Start GUI into settings
 def on_settings(icon, item):
+    logging.info("Settings GUI Opened through System Tray Menu")
     threading.Thread(target=open_settings, daemon=True).start()
+
+# Opens logs for the app
+def on_open_logs(icon, item):
+    log_path = os.path.join(base_dir(), "logs", "app.log")
+
+    if os.path.exists(log_path):
+        subprocess.Popen(["notepad", log_path])
+    else:
+        logging.error("Log file not found: %s", log_path)
+
+# Pause/Resume Function for Automation
+def on_pause_resume(icon, item):
+    global automation_paused
+
+    if automation_paused:
+        automation_paused = False
+        pause_event.set()
+        logging.info("Automation Resumed")
+        icon.notify("Automation Resumed")
+    else:
+        automation_paused = True
+        pause_event.clear()
+        logging.info("Automation Paused")
+        icon.notify("Automation Paused")
+
+# Tracks what to show to user based on automation state
+def pause_menu_text(item):
+    return "Resume Automation" if automation_paused else "Pause Automation"
 
 # Start the tray icon
 def start_tray():
     image = Image.open(resource_path("icon.png")).convert("RGBA").resize((64, 64))
-    menu = Menu(item("Settings", on_settings), item("Quit", on_quit))
+    menu = Menu(item("Settings", on_settings), item("Open App Logs", on_open_logs), item(pause_menu_text, on_pause_resume), item("Quit", on_quit))
     icon = Icon("Automation", image, "Complete Automation", menu)
     icon.run_detached()
 
-#================
+#=============
 # ENTRY POINT
-#================
+#=============
 
 if __name__ == "__main__":
     logging.info("Starting Tray App in daemon thread")
