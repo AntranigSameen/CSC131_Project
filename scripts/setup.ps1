@@ -17,5 +17,6 @@ pip install gspread google-auth google-auth-oauthlib google-auth-httplib2
 ##pip install pyzmail36
 pip install pyinstaller
 pip install playwright
+pip install pystray pillow
 
 Write-Host "Setup complete ✅"

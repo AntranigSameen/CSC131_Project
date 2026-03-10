@@ -3,6 +3,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from utils import resource_path
 from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
     expect,
@@ -72,7 +73,7 @@ def refresh_extracted_data_file_from_email(debug: bool = True) -> tuple[bool, bo
     Returns (ran, had_new_email).
     """
     try:
-        from Proper_MS.outlook_authentication import authenticate
+        from outlook_authentication import authenticate
         from run_helper import run_cycle
     except Exception as e:
         if debug:
@@ -105,9 +106,9 @@ def refresh_extracted_data_file_from_email(debug: bool = True) -> tuple[bool, bo
 
 
 def fatal(msg: str, code: int = 1) -> None:
-    # Print error and exit without a stack trace.
+    # Print error and DO NOT EXIT.
     print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
-    raise SystemExit(code)
+    raise RuntimeError(msg)                                     
 
 
 def _read_last_processed_index() -> int:
@@ -1394,8 +1395,10 @@ def _get_gsheet_worksheet(worksheet_name: str | None = None):
     except ModuleNotFoundError as e:
         raise ModuleNotFoundError("Missing dependency 'gspread'. Install with: pip install gspread google-auth") from e
 
+    key_path = resource_path(SERVICE_ACCOUNT_JSON)                                                          # Creates a path to the json file
+
     if _GS_GC is None:
-        _GS_GC = gspread.service_account(filename=SERVICE_ACCOUNT_JSON)
+        _GS_GC = gspread.service_account(filename=key_path)
 
     if _GS_SH is None:
         _GS_SH = _GS_GC.open_by_url(GOOGLE_SHEET_URL)
@@ -1419,7 +1422,7 @@ def append_rows_to_google_sheet_via_api(tsv_rows_only: str, worksheet_name: str 
     ws = _get_gsheet_worksheet(worksheet_name)
     ws.append_rows(values, value_input_option="RAW")
 
-def run_demo(headless: bool = False):
+def run_demo(name, date, headless: bool = False):
     # remove previous screenshots in shots/
     clean_shots_folder()
 
@@ -1433,20 +1436,18 @@ def run_demo(headless: bool = False):
             print(f"[EMAIL REFRESH] ran=True, new_email_processed={had_new}", flush=True)
 
     # Resolve the next unprocessed instructor/date before launching the browser
-    job = pull_next_unprocessed_instructor_and_date_from_extracted_data_file(debug=True)
-    if not job:
-        fatal(
-            f"No new incoming emails to process. No unprocessed valid entry found in {EXTRACTED_DATA_FILE}.\n"
-            "- If you run the email watcher separately: wait for a new unread email, then run again.\n"
-            "- If you want this script to pull the inbox once at startup: set EMAIL_REFRESH_ON_START=1."
-        )
+ #   job = pull_next_unprocessed_instructor_and_date_from_extracted_data_file(debug=True)
+ #   if not job:
+ #       fatal(
+ #           f"No new incoming emails to process. No unprocessed valid entry found in {EXTRACTED_DATA_FILE}.\n"
+ #           "- If you run the email watcher separately: wait for a new unread email, then run again.\n"
+ #           "- If you want this script to pull the inbox once at startup: set EMAIL_REFRESH_ON_START=1."
+ #       )
 
-    instructor_name, target_date, subject, raw_line, line_index = job
-    print(
-        f"[RUN CONFIG] Using extracted line #{line_index} (subject={subject!r}) -> "
-        f"instructor={instructor_name!r}, date={target_date!r}",
-        flush=True,
-    )
+    instructor_name = name
+    target_date = normalize_to_mmddyyyy(date)
+
+    print(f"[RUN CONFIG] Using extracted line) -> "f"instructor={instructor_name!r}, date={target_date!r}",flush=True,)
 
 
     # Save what we used (debug)
@@ -1557,7 +1558,8 @@ def run_demo(headless: bool = False):
         finally:
             # Write the index first so browser close
             if processed_ok:
-                _write_last_processed_index(line_index)
+                #_write_last_processed_index(line_index)
+                print("Processed Properly...")
 
             try:
                 context.close()

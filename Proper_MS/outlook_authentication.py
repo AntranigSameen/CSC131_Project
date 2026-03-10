@@ -51,21 +51,29 @@ def authenticate():
         result = None
 
     if not result:
-        flow = app.initiate_device_flow(scopes=SCOPES)
+        logging.info("Launching Microsoft Login Window...")                                         # Log the launch for outlook login
+
+        result = app.acquire_token_interactive(scopes=SCOPES)
+
+    ######TESTING TO SEE IF I NEED THIS########
+
+        """flow = app.initiate_device_flow(scopes=SCOPES)
         if "user_code" not in flow:
             print("Failed to create device flow:", flow)
             logging.info("Failed to create device flow. Check your client ID and authority.")       # Log the failure reason for debugging
             raise Exception("Failed to create device flow.")
         print(flow["message"])
         logging.info("Device flow initiated. User must authenticate.")                              # Log that the device flow has started
-        result = app.acquire_token_by_device_flow(flow)
+        result = app.acquire_token_by_device_flow(flow)"""
+
+#############################################################################################
 
     if cache.has_state_changed:
         with open(CACHE_FILE, "w") as f:
             f.write(cache.serialize())
     
-    if result and "access_token" in result:
-        logging.info("Authentication successful.")                                                  # Log successful authentication
+    if "access_token" in result:
+        logging.info("Outlook Authentication successful.")                                                  # Log successful authentication
         return result["access_token"]
 
     logging.error("Authentication failed: %s", result)                                              # Log the error description for debugging
