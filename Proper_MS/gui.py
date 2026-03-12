@@ -118,7 +118,7 @@ def open_settings():
     notebook.add(email_tab, text="Email Settings")
 
     container = email_tab.scrollable_frame
-    tb.Label(container, text="Emails From AHA", font=("Segoe UI", 12, "bold"))
+    #tb.Label(container, text="Emails From AHA", font=("Segoe UI", 12, "bold"))
 
     email_variables= {"Sender Email Address": "SENDER_EMAIL",
                       "Keyword Before Name": "KEYWORD_NAME",

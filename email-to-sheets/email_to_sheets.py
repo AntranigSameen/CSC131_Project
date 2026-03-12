@@ -418,27 +418,16 @@ def main():
 # Script Entry Point
 # ====================================================================
 
-if __name__ == "__main__":
+if name == "main":
     # Initialize logging system
     setup_logging()
-    
-    # Get polling interval from environment (how often to check for new emails)
-    INTERVAL = int(os.getenv("INTERVAL", "10"))  # Default: 10 seconds
 
     try:
-        # Infinite loop: continuously monitor for new emails
-        while True:
-            try:
-                # Run one complete processing cycle
-                main()
-            except Exception:
-                # Log errors but don't crash - keep the loop running
-                logging.exception("Error in main loop...")
-
-            # Wait before checking again
-            logging.info("Waiting for %s seconds before checking for new emails...", INTERVAL)
-            time.sleep(INTERVAL)
-
+        # Run one complete processing cycle
+        main()
     except KeyboardInterrupt:
         # Allow graceful shutdown with Ctrl+C
         logging.info("Stopped by user")
+    except Exception:
+        # Log errors
+        logging.exception("Error in main...")
