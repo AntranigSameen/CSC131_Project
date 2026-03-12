@@ -45,12 +45,24 @@ automation_paused = False
 pause_event = threading.Event()
 pause_event.set()                                                                           # start unpaused
 
-#==================
-# AUTOMATION LOGIC
-#==================
+#=============
+# STATUS READ
+#=============
+
+# Stores automation status so GUI can read
+def set_status(status):
+    status_file = os.path.join(base_dir, "automation_status.txt")
+
+    with open(status_file, "w") as f:
+        f.write(status)
+
+#===================
+# AUTOMATION SCRIPT
+#===================
 
 def automation_loop():
     logging.info("Starting the Automation Script...")                                       # Log the start of the master control script
+    set_status("RUNNING")                                                                   # Set status for program
 
     aha_login_check()                                                                       # check if the user has logged in to AHA, if not, open a browser window for them to log in
     logging.info("AHA login check complete.")                                               # Log the completion of AHA login check
@@ -121,11 +133,13 @@ def on_pause_resume(icon, item):
         pause_event.set()
         logging.info("Automation Resumed")
         icon.notify("Automation Resumed")
+        set_status("RUNNING")                                                                   # Set status for program
     else:
         automation_paused = True
         pause_event.clear()
         logging.info("Automation Paused")
         icon.notify("Automation Paused")
+        set_status("PAUSED")                                                                    # Set status for program
 
 # Tracks what to show to user based on automation state
 def pause_menu_text(item):

@@ -18,5 +18,6 @@ pip install gspread google-auth google-auth-oauthlib google-auth-httplib2
 pip install pyinstaller
 pip install playwright
 pip install pystray pillow
+pip install ttkbootstrap
 
 Write-Host "Setup complete ✅"
