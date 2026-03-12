@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load environment variables
 # ===========================
 
-load_dotenv()
+#load_dotenv()
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 
 if not SENDER_EMAIL:

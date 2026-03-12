@@ -31,6 +31,7 @@ def save_settings(entries):
 
     from dotenv import load_dotenv
     load_dotenv(CONFIG_FILE, override=True)
+    logging.info("New Settings Saved and Loaded")
 
 #=============
 # Scrollable

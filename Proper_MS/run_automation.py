@@ -9,14 +9,17 @@ from playwright.sync_api import (
     expect,
     sync_playwright,
 )
+"""
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
+"""
 
+ROOT = Path(__file__).resolve().parents[1]
 
-SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "google_sheet_api_key.json")  # google service account key file
+SERVICE_ACCOUNT_JSON = resource_path(os.getenv("SERVICE_ACCOUNT_AHA_JSON", "google_sheet_api_key.json"))  # google service account key file
 PROJECT_DIR = Path(__file__).resolve().parent  # folder that contains this script
 SAVED_LOGIN = PROJECT_DIR / "aha_auth.json"  # saved Edge login state (created by setup_login.py)
 GOOGLE_SHEET_URL = os.getenv(
@@ -124,20 +127,20 @@ def _read_last_processed_index() -> int:
     except Exception:
         return 0
 
-
+"""
 def _write_last_processed_index(idx_1based: int) -> None:
-    """Write last_processed_index.txt line number
+    """"""Write last_processed_index.txt line number
     
     print errors instead of hiding them, b/c a silent write failure looks like 
     the script is "stuck" on the same email forever...
-    """
+    """"""""
     idx = max(0, int(idx_1based))
     try:
         LAST_PROCESSED_INDEX_FILE.write_text(f"{idx}\n", encoding="utf-8")
         print(f"[INDEX] last_processed_index updated -> {idx} ({LAST_PROCESSED_INDEX_FILE})", flush=True)
     except Exception as e:
         print(f"[INDEX] FAILED to write {LAST_PROCESSED_INDEX_FILE}: {e!r}", flush=True)
-
+"""
 
 def _parse_extracted_csv_line(line: str) -> tuple[str, str, str]:
     """Parse one extracted_data.txt line into (subject, instructor_name, date_mmddyyyy)."""

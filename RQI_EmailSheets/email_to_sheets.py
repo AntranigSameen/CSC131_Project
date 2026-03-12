@@ -18,34 +18,43 @@ from typing import Dict, Any, List
 # Third-party imports
 import requests  # For making HTTP requests to Microsoft Graph API
 import gspread  # For Google Sheets integration
-from dotenv import load_dotenv  # For loading environment variables from .env file
+#from dotenv import load_dotenv  # For loading environment variables from .env file
 from google.oauth2.service_account import Credentials  # For Google Sheets authentication
 
-# Local authentication module (handles Microsoft OAuth2 device flow)
-from authentication import authenticate
+# Authentication module from Proper_MS(handles Microsoft OAuth2 device flow)
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT / "RQI_EmailSheets"))
+
+from Proper_MS.outlook_authentication import authenticate
+from Proper_MS.utils import resource_path
 
 # =====================
 # Environment Variables
 # =====================
 # Load configuration from .env file in the same directory
 
-load_dotenv()
+#load_dotenv()
+INTERVAL = os.getenv("INTERVAL", "10") # Defaults to 10 Seconds
+
 
 # Email provider configuration (must be 'outlook' for this script)
 PROVIDER = (os.getenv("EMAIL_PROVIDER") or "").strip().lower()
 
 # Optional: Filter emails to only process those from a specific sender
-SENDER_EMAIL = (os.getenv("SENDER_EMAIL") or "").strip()
+SENDER_EMAIL = (os.getenv("SENDER_EMAIL_RQI") or "").strip()
 
 # Google Sheets configuration
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")  # The ID from the Google Sheets URL
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Leads")  # Name of the worksheet tab
-SERVICE_ACCOUNT_JSON_NAME = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
+SERVICE_ACCOUNT_JSON_NAME = PROJECT_ROOT / os.getenv("SERVICE_ACCOUNT_RQI_JSON", "service_account.json")
 
 # Build absolute path to service account file relative to this script's location
 # This ensures the file can be found regardless of where the script is run from
 SCRIPT_DIR = Path(__file__).parent
-SERVICE_ACCOUNT_JSON = str(SCRIPT_DIR / SERVICE_ACCOUNT_JSON_NAME)
+SERVICE_ACCOUNT_JSON = resource_path(SERVICE_ACCOUNT_JSON_NAME.name if hasattr(SERVICE_ACCOUNT_JSON_NAME, 'name') else SERVICE_ACCOUNT_JSON_NAME)
 
 # Microsoft Graph API base URL for making API calls
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -414,11 +423,28 @@ def main():
         print(f"✅ Appended row / subject: {subject} / from: {sender}")
 
 
+# ====================
+# Runs Script Forever
+# ====================
+
+def run_forever(interval=INTERVAL):
+
+    setup_logging()
+
+    while True:
+
+        try:
+            main()
+        except Exception:
+            logging.exception("Email to sheets error")
+
+        time.sleep(int(interval))
+
 # ====================================================================
 # Script Entry Point
 # ====================================================================
 
-if name == "main":
+if __name__ == "__main__":
     # Initialize logging system
     setup_logging()
 

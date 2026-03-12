@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 # Load environment variables
 # ===========================
 
-load_dotenv()
+#load_dotenv()
 KEYWORD_NAME = os.getenv("KEYWORD_NAME")
 
 # =================

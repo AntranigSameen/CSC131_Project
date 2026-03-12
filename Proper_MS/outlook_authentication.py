@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load environment variables
 # ===========================
 
-load_dotenv()
+#load_dotenv()
 
 CLIENT_ID = os.getenv("CLIENT_ID")
 AUTHORITY = os.getenv("AUTHORITY", "https://login.microsoftonline.com/consumers")
