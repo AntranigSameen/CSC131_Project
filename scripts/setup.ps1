@@ -19,5 +19,6 @@ pip install pyinstaller
 pip install playwright
 pip install pystray pillow
 pip install ttkbootstrap
+python -m playwright install
 
 Write-Host "Setup complete ✅"

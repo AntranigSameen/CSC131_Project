@@ -8,12 +8,13 @@ import time
 import logging
 import threading
 import subprocess
+import certifi
 from queue import Queue
 
 from pathlib import Path
 from dotenv import load_dotenv
 
-from utils import resource_path, log_file, base_dir
+from utils import resource_path, log_file, base_dir, load_settings, env_file, ensure_external_env
 
 """PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -23,10 +24,11 @@ if str(PROJECT_ROOT) not in sys.path:
 # Load Environment Variables
 #============================
 
-load_dotenv(dotenv_path=resource_path(".env"), override=True)
+os.environ["SSL_CERT_FILE"] = certifi.where()
+ensure_external_env()
+load_dotenv(dotenv_path=env_file(), override=True)
 
 INTERVAL = int(os.getenv("INTERVAL", "10"))                                                                                            # Default to 10 seconds if not set
-#IS_HEADLESS = bool(os.getenv("IS_HEADLESS", False))
 
 #==============
 # MORE IMPORTS
@@ -53,15 +55,15 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# =======================================
+# ===========================================
 # Set up Global Variable, Pause Event, Queue
-# =======================================
+# ===========================================
 
 automation_paused = False
 pause_event = threading.Event()
 pause_event.set()                                                                                                                      # Start unpaused
 
-automation_queue = Queue()                                                                                                             # Queue to process automation tasks
+automation_queue = Queue(maxsize=5)                                                                                                             # Queue to process automation tasks
 
 #============= 
 # STATUS READ
@@ -90,7 +92,8 @@ def automation_worker():
         name, date = automation_queue.get()
         logging.info("Worker starting automation task: %s, %s", name, date)
         try:
-            run_demo(name=name, date=date, headless=False)
+            settings = load_settings()
+            run_demo(name=name, date=date, headless=settings["IS_HEADLESS"])
         except Exception as e:
             logging.exception("Error in automation_worker for %s, %s: %s", name, date, e)
         finally:
@@ -105,8 +108,12 @@ def automation_loop():
     logging.info("Starting the Automation Script...")                                                                                  # Log the start of the master control script
     set_status("RUNNING")                                                                                                              # Set status for program
 
-    aha_login_check()                                                                                                                  # Check if the user has logged in to AHA
-    logging.info("AHA login check complete.")                                                                                          # Log completion
+    aha_auth_file = Path(base_dir()) / "aha_auth.json"                                                                                 # Checks for AHA log in file
+    if not aha_auth_file.exists():
+        aha_login_check()  # user will manually log in once                                                                            # Run AHA log in manually if no file
+        logging.info("AHA login completed and state saved.")                                                                           # Logs the login
+    else:
+        logging.info("Using existing AHA login state: %s", aha_auth_file)                                                              # Logs whether file was used
 
     token = authenticate()                                                                                                             # authenticate with Outlook and return token
     if not token:
@@ -121,8 +128,8 @@ def automation_loop():
     while True:
         pause_event.wait()                                                                                                             # Pause when automation paused
 
-        load_dotenv(resource_path(".env"), override=True)                                                                              # Reload env in case user edited it
-        interval = int(os.getenv("INTERVAL", "10"))
+        settings = load_settings()                                                                                                     # Reload ENV file for settings changes
+        interval = settings["INTERVAL"]
 
         result = None
         try:
@@ -134,8 +141,11 @@ def automation_loop():
             logging.info("Email parsed successfully. Result: %s", result)
             try:
                 name, date = result.split(",")
-                logging.info("Queuing automation task: %s, %s", name, date)
-                automation_queue.put((name, date))                                                                                     # Add to queue for worker
+                if automation_queue.full():                                                                                            # Add to queue for worker
+                    logging.warning("Automation queue full. Skipping task: %s, %s", name, date)
+                else:
+                    logging.info("Queuing automation task: %s, %s (queue size: %d)", name, date, automation_queue.qsize())
+                    automation_queue.put((name, date))
             except Exception as e:
                 logging.exception("Error queuing automation cycle: %s", e)
         else:
