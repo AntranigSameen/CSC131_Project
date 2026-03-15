@@ -77,32 +77,7 @@ def restart_application():
     logging.info("Restarting application")
 
     exe_path = os.path.abspath(sys.executable)
-    work_dir = os.path.dirname(exe_path)
-    current_pid = os.getpid()
-
-    if getattr(sys, "frozen", False):
-        restart_bat = os.path.join(base_dir(), "_restart_helper.bat")
-
-        with open(restart_bat, "w", encoding="utf-8") as f:
-            f.write(
-                f'@echo off\n'
-                f'timeout /t 1 /nobreak > nul\n'
-                f'taskkill /PID {current_pid} /F > nul 2>&1\n'
-                f'timeout /t 2 /nobreak > nul\n'
-                f'start "" "{exe_path}"\n'
-                f'del "%~f0"\n'
-            )
-
-        subprocess.Popen(
-            ["cmd.exe", "/c", restart_bat],
-            cwd=work_dir,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-            close_fds=True,
-        )
-
-        return
-
-    subprocess.Popen([sys.executable] + sys.argv, cwd=os.getcwd(), close_fds=True)
+    subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
     os._exit(0)
 
 #=================
