@@ -59,11 +59,55 @@ logging.basicConfig(
 # Set up Global Variable, Pause Event, Queue
 # ===========================================
 
+settings_window_open = False
+settings_window_lock = threading.Lock()
+settings_root_ref = None
+
 automation_paused = False
 pause_event = threading.Event()
 pause_event.set()                                                                                                                      # Start unpaused
 
-automation_queue = Queue(maxsize=5)                                                                                                             # Queue to process automation tasks
+automation_queue = Queue(maxsize=5)                                                                                                    # Queue to process automation tasks
+
+tray_icon_ref = None
+
+def is_automation_paused():
+    return automation_paused
+
+def set_pause_state(paused: bool, icon=None):
+    global automation_paused
+    automation_paused = paused
+
+    if paused:
+        pause_event.clear()
+        set_status("PAUSED")
+        logging.info("Automation Paused")
+        if icon:
+            icon.notify("Automation Paused")
+    else:
+        pause_event.set()
+        set_status("RUNNING")
+        logging.info("Automation Resumed")
+        if icon:
+            icon.notify("Automation Resumed")
+
+def toggle_pause(icon=None):
+    set_pause_state(not automation_paused, icon=icon)
+
+
+def quit_application(icon=None):
+    logging.info("Exiting Application")
+    try:
+        if icon:
+            icon.stop()
+    except Exception:
+        pass
+    os._exit(0)
+
+def set_queue_status(count):
+    queue_file = os.path.join(base_dir(), "queue_status.txt")
+    with open(queue_file, "w", encoding="utf-8") as f:
+        f.write(str(count))
 
 #============= 
 # STATUS READ
@@ -98,6 +142,7 @@ def automation_worker():
             logging.exception("Error in automation_worker for %s, %s: %s", name, date, e)
         finally:
             automation_queue.task_done()
+            set_queue_status(automation_queue.qsize())
             logging.info("Worker completed automation task: %s, %s", name, date)
 
 #===================
@@ -124,6 +169,8 @@ def automation_loop():
     # Start the automation worker thread (non-daemon for safe shutdown)
     threading.Thread(target=automation_worker, daemon=False).start()
 
+    set_queue_status(automation_queue.qsize())
+
     # Main cycle: check emails and queue automation tasks
     while True:
         pause_event.wait()                                                                                                             # Pause when automation paused
@@ -146,6 +193,7 @@ def automation_loop():
                 else:
                     logging.info("Queuing automation task: %s, %s (queue size: %d)", name, date, automation_queue.qsize())
                     automation_queue.put((name, date))
+                    set_queue_status(automation_queue.qsize())
             except Exception as e:
                 logging.exception("Error queuing automation cycle: %s", e)
         else:
@@ -154,18 +202,59 @@ def automation_loop():
         logging.info("Cycle complete. Waiting %d seconds for next cycle...", interval)
         time.sleep(interval)
 
+#=================
+# GUI WINDOW OPEN
+#=================
+
+def open_settings_window():
+    global settings_window_open, settings_root_ref
+
+    with settings_window_lock:
+        if settings_window_open:
+            logging.info("Settings window already open")
+            try:
+                if settings_root_ref is not None:
+                    def show_existing_window():
+                        settings_root_ref.deiconify()
+                        settings_root_ref.lift()
+                        settings_root_ref.focus_force()
+
+                    settings_root_ref.after(0, show_existing_window)
+                    
+            except Exception as e:
+                logging.exception("Could not bring settings window to front: %s", e)
+            return
+
+        settings_window_open = True
+
+    def register_root(root):
+        global settings_root_ref
+        settings_root_ref = root
+
+    try:
+        logging.info("Opening settings window")
+        open_settings(
+            on_pause_resume=toggle_pause,
+            on_quit=quit_application,
+            get_pause_state=is_automation_paused,
+            on_ready=register_root,
+        )
+    finally:
+        with settings_window_lock:
+            settings_window_open = False
+            settings_root_ref = None
+        logging.info("Settings window closed")
+
 #===========
 # TRAY ICON
 #===========
 
 def on_quit(icon, item):
-    logging.info("Exiting Application through System Tray Menu")
-    icon.stop()
-    os._exit(0)
+    quit_application(icon)
 
 def on_settings(icon, item):
-    logging.info("Settings GUI Opened through System Tray Menu")
-    threading.Thread(target=open_settings, daemon=True).start()
+    logging.info("Settings requested through System Tray Menu")
+    threading.Thread(target=open_settings_window, daemon=True).start()
 
 def on_open_logs(icon, item):
     log_path = os.path.join(base_dir(), "logs", "app.log")
@@ -175,24 +264,13 @@ def on_open_logs(icon, item):
         logging.error("Log file not found: %s", log_path)
 
 def on_pause_resume(icon, item):
-    global automation_paused
-    if automation_paused:
-        automation_paused = False
-        pause_event.set()
-        logging.info("Automation Resumed")
-        icon.notify("Automation Resumed")
-        set_status("RUNNING")
-    else:
-        automation_paused = True
-        pause_event.clear()
-        logging.info("Automation Paused")
-        icon.notify("Automation Paused")
-        set_status("PAUSED")
+    toggle_pause(icon)
 
 def pause_menu_text(item):
     return "Resume Automation" if automation_paused else "Pause Automation"
 
 def start_tray():
+    global tray_icon_ref
     image = Image.open(resource_path("icon.png")).convert("RGBA").resize((64, 64))
     menu = Menu(
         item("Settings", on_settings),
@@ -200,8 +278,8 @@ def start_tray():
         item(pause_menu_text, on_pause_resume),
         item("Quit", on_quit)
     )
-    icon = Icon("Automation", image, "Complete Automation", menu)
-    icon.run_detached()
+    tray_icon_ref = Icon("Automation", image, "Complete Automation", menu)
+    tray_icon_ref.run_detached()
 
 #=============
 # ENTRY POINT
@@ -213,6 +291,9 @@ if __name__ == "__main__":
 
     logging.info("Starting Tray App in Daemon Thread")
     threading.Thread(target=start_tray, daemon=True).start()                                                                           # Tray in daemon thread
+
+    logging.info("Opening Settings GUI on startup")
+    threading.Thread(target=open_settings_window, daemon=True).start()                                                                 # GUI window in daemon thread
 
     logging.info("Starting Automation Loop in Main Thread")
     automation_loop()                                                                                                                  # Main loop
