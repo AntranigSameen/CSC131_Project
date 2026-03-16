@@ -3,11 +3,9 @@
 #=========
 
 import os
-import sys
 import time
 import logging
 import threading
-import subprocess
 import certifi
 from queue import Queue
 
@@ -33,9 +31,6 @@ INTERVAL = int(os.getenv("INTERVAL", "10"))                                     
 #==============
 # MORE IMPORTS
 #==============
-
-from pystray import Icon, MenuItem as item, Menu
-from PIL import Image
 
 from gui import open_settings
 from setup_login import aha_login_check
@@ -63,11 +58,41 @@ automation_paused = False
 pause_event = threading.Event()
 pause_event.set()                                                                                                                      # Start unpaused
 
-automation_queue = Queue(maxsize=5)                                                                                                             # Queue to process automation tasks
+automation_queue = Queue(maxsize=5)                                                                                                    # Queue to process automation tasks
 
-#============= 
-# STATUS READ
-#=============
+def is_automation_paused():
+    return automation_paused
+
+def set_pause_state(paused: bool, icon=None):
+    global automation_paused
+    automation_paused = paused
+
+    if paused:
+        pause_event.clear()
+        set_status("PAUSED")
+        logging.info("Automation Paused")
+
+    else:
+        pause_event.set()
+        set_status("RUNNING")
+        logging.info("Automation Resumed")
+
+def toggle_pause(icon=None):
+    set_pause_state(not automation_paused, icon=icon)
+
+
+def quit_application(icon=None):
+    logging.info("Exiting Application")
+    os._exit(0)
+
+def set_queue_status(count):
+    queue_file = os.path.join(base_dir(), "queue_status.txt")
+    with open(queue_file, "w", encoding="utf-8") as f:
+        f.write(str(count))
+
+#===================
+# STATUS READ/WRITE
+#===================
 
 def set_status(status):
     status_file = os.path.join(base_dir(), "automation_status.txt")
@@ -98,6 +123,7 @@ def automation_worker():
             logging.exception("Error in automation_worker for %s, %s: %s", name, date, e)
         finally:
             automation_queue.task_done()
+            set_queue_status(automation_queue.qsize())
             logging.info("Worker completed automation task: %s, %s", name, date)
 
 #===================
@@ -124,6 +150,8 @@ def automation_loop():
     # Start the automation worker thread (non-daemon for safe shutdown)
     threading.Thread(target=automation_worker, daemon=False).start()
 
+    set_queue_status(automation_queue.qsize())
+
     # Main cycle: check emails and queue automation tasks
     while True:
         pause_event.wait()                                                                                                             # Pause when automation paused
@@ -146,6 +174,7 @@ def automation_loop():
                 else:
                     logging.info("Queuing automation task: %s, %s (queue size: %d)", name, date, automation_queue.qsize())
                     automation_queue.put((name, date))
+                    set_queue_status(automation_queue.qsize())
             except Exception as e:
                 logging.exception("Error queuing automation cycle: %s", e)
         else:
@@ -154,65 +183,30 @@ def automation_loop():
         logging.info("Cycle complete. Waiting %d seconds for next cycle...", interval)
         time.sleep(interval)
 
-#===========
-# TRAY ICON
-#===========
+#=================
+# GUI WINDOW OPEN
+#=================
 
-def on_quit(icon, item):
-    logging.info("Exiting Application through System Tray Menu")
-    icon.stop()
-    os._exit(0)
+def open_settings_window():
+    logging.info("Opening settings window")
+    open_settings(on_pause_resume=toggle_pause, on_quit=quit_application, get_pause_state=is_automation_paused,)
 
-def on_settings(icon, item):
-    logging.info("Settings GUI Opened through System Tray Menu")
-    threading.Thread(target=open_settings, daemon=True).start()
+# ==================
+# BACKGROUND STARTUP
+# ==================
 
-def on_open_logs(icon, item):
-    log_path = os.path.join(base_dir(), "logs", "app.log")
-    if os.path.exists(log_path):
-        subprocess.Popen(["notepad", log_path])
-    else:
-        logging.error("Log file not found: %s", log_path)
+def start_background_services():
+    logging.info("Starting RQI Email to Sheets Searches")
+    start_email_to_sheets()                                                                                                            # Email-to-sheets in daemon thread
 
-def on_pause_resume(icon, item):
-    global automation_paused
-    if automation_paused:
-        automation_paused = False
-        pause_event.set()
-        logging.info("Automation Resumed")
-        icon.notify("Automation Resumed")
-        set_status("RUNNING")
-    else:
-        automation_paused = True
-        pause_event.clear()
-        logging.info("Automation Paused")
-        icon.notify("Automation Paused")
-        set_status("PAUSED")
-
-def pause_menu_text(item):
-    return "Resume Automation" if automation_paused else "Pause Automation"
-
-def start_tray():
-    image = Image.open(resource_path("icon.png")).convert("RGBA").resize((64, 64))
-    menu = Menu(
-        item("Settings", on_settings),
-        item("Open App Logs", on_open_logs),
-        item(pause_menu_text, on_pause_resume),
-        item("Quit", on_quit)
-    )
-    icon = Icon("Automation", image, "Complete Automation", menu)
-    icon.run_detached()
+    logging.info("Starting Automation Loop in Daemon Thread")
+    threading.Thread(target=automation_loop, daemon=True).start()                                                                      # Main loop
 
 #=============
 # ENTRY POINT
 #=============
 
 if __name__ == "__main__":
-    logging.info("Starting RQI Email to Sheets Searches")
-    start_email_to_sheets()                                                                                                            # Email-to-sheets in daemon thread
-
-    logging.info("Starting Tray App in Daemon Thread")
-    threading.Thread(target=start_tray, daemon=True).start()                                                                           # Tray in daemon thread
-
-    logging.info("Starting Automation Loop in Main Thread")
-    automation_loop()                                                                                                                  # Main loop
+    start_background_services()
+    logging.info("Opening Settings GUI on startup")
+    open_settings_window()                                                                                                             # GUI in Main Thread

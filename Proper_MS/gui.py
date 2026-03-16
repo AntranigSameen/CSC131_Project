@@ -1,21 +1,40 @@
-#==========
+# ==========
 # IMPORTS
-#==========
+# ==========
 
 import os
 import sys
 import subprocess
-import ttkbootstrap as tb
 import logging
-
 from pathlib import Path
-from utils import env_file, writable_env_file, base_dir, log_file
-from tkinter import messagebox
-from dotenv import set_key, load_dotenv
 
-#============================
-# Load Environment Variables
-#============================
+from dotenv import set_key, load_dotenv
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QIcon
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QFrame,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTabWidget,
+    QScrollArea,
+    QLineEdit,
+    QMessageBox,
+    QTextEdit,
+    QFormLayout,
+    QSystemTrayIcon,
+    QMenu,
+)
+
+from utils import writable_env_file, base_dir, log_file, resource_path
+
+# ============================
+# LOAD ENVIRONMENT VARIABLES
+# ============================
 
 CONFIG_FILE = writable_env_file()
 load_dotenv(CONFIG_FILE)
@@ -30,19 +49,19 @@ RESTART_REQUIRED = {
     "SERVICE_ACCOUNT_RQI_JSON",
     "SERVICE_ACCOUNT_AHA_JSON",
     "AHA_USERNAME",
-    "AHA_PASSWORD"
+    "AHA_PASSWORD",
 }
 
-#===============
-# Save Settings
-#===============
 
-# SAVE EDITED VARIABLES IN ENV
+# ===============
+# SAVE SETTINGS
+# ===============
+
 def save_settings(entries, restart=False):
     restart_needed = False
 
-    for key, var in entries.items():
-        new_value = var.get()
+    for key, widget in entries.items():
+        new_value = widget.text()
         old_value = os.getenv(key, "")
 
         if new_value != old_value and key in RESTART_REQUIRED:
@@ -50,314 +69,671 @@ def save_settings(entries, restart=False):
 
         set_key(CONFIG_FILE, key, new_value)
 
-    logging.info("Settings saved successfully")
-
-    from dotenv import load_dotenv
     load_dotenv(CONFIG_FILE, override=True)
-
-    logging.info("New Settings Saved and Loaded")
+    logging.info("Settings saved successfully")
 
     if restart:
         restart_application()
-
     else:
         if restart_needed:
-            messagebox.showwarning(
+            QMessageBox.warning(
+                None,
                 "Restart Required",
-                "Some changes require restarting the automation to take effect."
+                "Some changes require restarting the automation to take effect.",
             )
         else:
-            messagebox.showinfo("Saved", "Settings saved successfully!")
+            QMessageBox.information(None, "Saved", "Settings saved successfully!")
 
-#=================
-# Restart Program
-#=================
+
+# =================
+# RESTART PROGRAM
+# =================
 
 def restart_application():
     logging.info("Restarting application")
-
     exe_path = os.path.abspath(sys.executable)
     subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
     os._exit(0)
 
-#=================
-# Sign Out of AHA
-#=================
 
-# Deletes the saved AHA login state so the next run requires manual login.
+# =================
+# SIGN OUT OF AHA
+# =================
+
 def sign_out():
     aha_auth_file = Path(base_dir()) / "aha_auth.json"
     if aha_auth_file.exists():
-        aha_auth_file.unlink()                                                                                                  # Delete the file
+        aha_auth_file.unlink()
         logging.info("User signed out: deleted AHA login state")
-        tb.messagebox.showinfo("Signed Out", "AHA login state cleared. You will need to sign in next time.")
+        QMessageBox.information(
+            None,
+            "Signed Out",
+            "AHA login state cleared. You will need to sign in next time.",
+        )
     else:
-        logging.info("Sign out requested, but aha_auth.json does not exist")
-        tb.messagebox.showinfo("Info", "No existing AHA login state to delete.")
+        QMessageBox.information(
+            None,
+            "Info",
+            "No existing AHA login state to delete.",
+        )
 
-#=============
-# Scrollable
-#=============
 
-# Container that scrolls
-class ScrollableFrame(tb.Frame):
+# ==============
+# STATUS CARD
+# ==============
 
-    def __init__(self, container):
-        super().__init__(container)
-        canvas = tb.Canvas(self)
-        scrollbar = tb.Scrollbar(self, orient="vertical", command=canvas.yview)
+class StatusCard(QFrame):
+    def __init__(self, title: str, value: str = ""):
+        super().__init__()
+        self.setObjectName("StatusCard")
 
-        self.scrollable_frame = tb.Frame(canvas)
-        self.scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(4)
 
-        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("StatusCardTitle")
 
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        self.value_label = QLabel(value)
+        self.value_label.setObjectName("StatusCardValue")
 
-#=========
-# BUTTONS
-#=========
-def buttons(root, entries):
-    button_frame = tb.Frame(root)
-    button_frame.pack(pady=10)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.value_label)
 
-    # Save Button 
-    tb.Button(button_frame, text="Save", bootstyle="success", command=lambda: save_settings(entries, restart=False)).pack(side="left", padx=10)
+    def set_value(self, text: str):
+        self.value_label.setText(text)
 
-    # Restart Button
-    tb.Button(button_frame, text="Restart", bootstyle="danger", command=restart_application).pack(side="left", padx=10)
+    def set_color(self, color: str):
+        self.value_label.setStyleSheet(f"color: {color}; font-weight: 700;")
 
-    # Sign Out of AHA Button
-    tb.Button(button_frame, text="Sign Out of AHA", bootstyle="warning", command=sign_out).pack(side="left", padx=10)
 
-#==============
-# Settings GUI
-#==============
+# ===================
+# SCROLLABLE PAGE
+# ===================
 
-# CREATES A WINDOW
-def open_settings():
-    root = tb.Window(themename="darkly")                                                                                        # Theme
-    root.title("Automation Machine")                                                                                            # Title
-    root.geometry("1280x720")                                                                                                   # Window Size
+class ScrollablePage(QWidget):
+    def __init__(self, child_widget: QWidget):
+        super().__init__()
 
-    notebook = tb.Notebook(root)                                                                                                # Create TABS
-    notebook.pack(fill="both", expand=True, padx=15, pady=15)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-    entries = {}
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(child_widget)
 
-    #========
-    # STATUS
-    #========
+        layout.addWidget(scroll)
+
+# =================
+# SYSTEM TRAY ICON
+# =================
+
+class AppTrayIcon(QSystemTrayIcon):
+    def __init__(self, window, on_pause_resume=None, on_quit=None, get_pause_state=None):
+        icon_path = resource_path("icon.png")
+        super().__init__(QIcon(icon_path), window)
+
+        self.window = window
+        self.on_pause_resume = on_pause_resume
+        self.on_quit = on_quit
+        self.get_pause_state = get_pause_state
+
+        self.menu = QMenu()
+
+        self.settings_action = QAction("Settings", self)
+        self.settings_action.triggered.connect(self.show_settings)
+        self.menu.addAction(self.settings_action)
+
+        self.logs_action = QAction("Open App Logs", self)
+        self.logs_action.triggered.connect(self.open_logs)
+        self.menu.addAction(self.logs_action)
+
+        self.pause_action = QAction(self.pause_menu_text(), self)
+        self.pause_action.triggered.connect(self.pause_resume_clicked)
+        self.menu.addAction(self.pause_action)
+
+        self.menu.addSeparator()
+
+        self.quit_action = QAction("Quit", self)
+        self.quit_action.triggered.connect(self.quit_clicked)
+        self.menu.addAction(self.quit_action)
+
+        self.setContextMenu(self.menu)
+        self.setToolTip("Complete Automation")
+        self.activated.connect(self.on_activated)
+
+    def pause_menu_text(self):
+        if self.get_pause_state and self.get_pause_state():
+            return "Resume Automation"
+        return "Pause Automation"
+
+    def refresh_pause_text(self):
+        self.pause_action.setText(self.pause_menu_text())
+
+    def show_settings(self):
+        self.window.show()
+        self.window.raise_()
+        self.window.activateWindow()
+
+    def open_logs(self):
+        log_path = log_file()
+        if os.path.exists(log_path):
+            subprocess.Popen(["notepad", log_path])
+        else:
+            logging.error("Log file not found: %s", log_path)
+
+    def pause_resume_clicked(self):
+        if self.on_pause_resume:
+            self.on_pause_resume()
+        self.refresh_pause_text()
+
+    def quit_clicked(self):
+        if self.on_quit:
+            self.on_quit()
+        else:
+            os._exit(0)
+
+    def on_activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            self.show_settings()
+
+# ==================
+# MAIN WINDOW
+# ==================
+
+class SettingsWindow(QMainWindow):
+    def __init__(self, on_pause_resume=None, on_quit=None, get_pause_state=None, on_ready=None):
+        super().__init__()
+
+        self.on_pause_resume = on_pause_resume
+        self.on_quit = on_quit
+        self.get_pause_state = get_pause_state
+        self.entries = {}
+
+        self.setWindowTitle("Automation Control Center")
+        self.resize(1360, 820)
+        self.setMinimumSize(1120, 700)
+
+        self._build_ui()
+        self._start_timers()
+
+        if on_ready:
+            on_ready(self)
     
-    status_var = tb.StringVar(value="Checking status...")
+    # ==================
+    # TRAY NOTIFICATION
+    # ==================
 
-    status_frame = tb.Frame(root)
-    status_frame.pack(fill="x", pady=10)
+    def notify_tray(self, title: str, message: str):
+        global _qt_tray
+        if _qt_tray is not None:
+            _qt_tray.showMessage(title, message, QSystemTrayIcon.Information, 3000)
 
-    tb.Label(status_frame, text= "Automation Status:", font=("Segoe UI", 8, "bold")).pack(side="left", padx=10)
+    # ==========
+    # BUILD UI
+    # ==========
 
-    status_label = tb.Label(status_frame, textvariable=status_var, bootstyle="success")
-    status_label.pack(side="left")
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
 
-    #===============
-    # UPDATE STATUS
-    #===============
+        root = QVBoxLayout(central)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(10)
 
-    def update_status():
+        header = QVBoxLayout()
+        title = QLabel("Automation Control Center")
+        title.setObjectName("MainTitle")
+        header.addWidget(title)
+        root.addLayout(header)
 
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(10)
+
+        self.automation_card = StatusCard("Automation", "Checking status...")
+        self.browser_card = StatusCard("Browser", "")
+        self.interval_card = StatusCard("Interval", "")
+        self.queue_card = StatusCard("Queue", "")
+
+        cards_row.addWidget(self.automation_card)
+        cards_row.addWidget(self.browser_card)
+        cards_row.addWidget(self.interval_card)
+        cards_row.addWidget(self.queue_card)
+
+        root.addLayout(cards_row)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+
+        self.save_btn = QPushButton("Save Settings")
+        self.pause_btn = QPushButton("Pause Automation")
+        self.restart_btn = QPushButton("Restart App")
+        self.signout_btn = QPushButton("Sign Out of AHA")
+        self.quit_btn = QPushButton("Quit")
+
+        self.save_btn.clicked.connect(lambda: save_settings(self.entries, restart=False))
+        self.pause_btn.clicked.connect(self._pause_resume_clicked)
+        self.restart_btn.clicked.connect(restart_application)
+        self.signout_btn.clicked.connect(sign_out)
+        self.quit_btn.clicked.connect(self._quit_clicked)
+
+        toolbar.addWidget(self.save_btn)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.pause_btn)
+        toolbar.addWidget(self.restart_btn)
+        toolbar.addWidget(self.signout_btn)
+        toolbar.addWidget(self.quit_btn)
+
+        root.addLayout(toolbar)
+
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs, 1)
+
+        self._build_overview_tab()
+        self._build_aha_tab()
+        self._build_email_tab()
+        self._build_sheets_tab()
+        self._build_auth_tab()
+        self._build_general_tab()
+        self._build_logs_tab()
+
+        self._apply_styles()
+
+    # ==============
+    # TAB BUILDERS
+    # ==============
+
+    def _build_overview_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        self.quick_status = QLabel("Checking status...")
+        self.quick_login = QLabel("Checking login state...")
+        self.quick_mode = QLabel("")
+        self.quick_queue = QLabel("")
+
+        layout.addWidget(QLabel("Application Overview"))
+        layout.addWidget(QLabel("Use this window to manage automation settings, monitor live status, review logs, and control the automation process."))
+        layout.addSpacing(12)
+        layout.addWidget(QLabel("Quick Status"))
+        layout.addWidget(self.quick_status)
+        layout.addWidget(self.quick_login)
+        layout.addWidget(self.quick_mode)
+        layout.addWidget(self.quick_queue)
+        layout.addStretch(1)
+
+        self.tabs.addTab(ScrollablePage(page), "Overview")
+
+    def _build_aha_tab(self):
+        page = QWidget()
+        form = QFormLayout(page)
+
+        self.aha_login_label = QLabel("Checking login state...")
+        form.addRow("AHA Login Status:", self.aha_login_label)
+
+        aha_user = QLineEdit(os.getenv("AHA_USERNAME", ""))
+        aha_pass = QLineEdit(os.getenv("AHA_PASSWORD", ""))
+        aha_pass.setEchoMode(QLineEdit.Password)
+
+        self.entries["AHA_USERNAME"] = aha_user
+        self.entries["AHA_PASSWORD"] = aha_pass
+
+        form.addRow("AHA Username", aha_user)
+        form.addRow("AHA Password", aha_pass)
+
+        self.tabs.addTab(ScrollablePage(page), "AHA Login")
+
+    def _build_email_tab(self):
+        page = QWidget()
+        form = QFormLayout(page)
+
+        fields = {
+            "SENDER_EMAIL": "Sender Email Address",
+            "KEYWORD_NAME": "Keyword Before Name",
+            "INTERVAL": "Automation Interval (seconds)",
+        }
+
+        for key, label in fields.items():
+            edit = QLineEdit(os.getenv(key, ""))
+            self.entries[key] = edit
+            form.addRow(label, edit)
+
+        self.tabs.addTab(ScrollablePage(page), "Email")
+
+    def _build_sheets_tab(self):
+        page = QWidget()
+        form = QFormLayout(page)
+
+        fields = {
+            "SERVICE_ACCOUNT_RQI_JSON": "RQI Service Account File",
+            "SERVICE_ACCOUNT_AHA_JSON": "AHA Service Account File",
+            "GOOGLE_SHEET_URL": "AHA Google Sheet URL",
+            "SPREADSHEET_ID": "RQI Google Sheet ID",
+        }
+
+        for key, label in fields.items():
+            edit = QLineEdit(os.getenv(key, ""))
+            self.entries[key] = edit
+            form.addRow(label, edit)
+
+        self.tabs.addTab(ScrollablePage(page), "Sheets")
+
+    def _build_auth_tab(self):
+        page = QWidget()
+        form = QFormLayout(page)
+
+        fields = {
+            "CLIENT_ID": "Azure Client ID",
+            "TENANT_ID": "Azure Tenant ID",
+            "AUTHORITY": "Highest Credential Access",
+            "SCOPES": "App Permissions",
+            "CACHE_FILE": "Cache File",
+        }
+
+        for key, label in fields.items():
+            edit = QLineEdit(os.getenv(key, ""))
+            self.entries[key] = edit
+            form.addRow(label, edit)
+
+        self.tabs.addTab(ScrollablePage(page), "Authentication")
+
+    def _build_general_tab(self):
+        page = QWidget()
+        form = QFormLayout(page)
+
+        fields = {
+            "ORG_NAME": "Organization Name",
+            "IS_HEADLESS": "Run Headless",
+        }
+
+        for key, label in fields.items():
+            edit = QLineEdit(os.getenv(key, ""))
+            self.entries[key] = edit
+            form.addRow(label, edit)
+
+        self.tabs.addTab(ScrollablePage(page), "General")
+
+    def _build_logs_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        title = QLabel("Live Application Logs")
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+
+        layout.addWidget(title)
+        layout.addWidget(self.log_text)
+
+        self.tabs.addTab(page, "System Logs")
+
+    # =================
+    # UI INTERACTIONS
+    # =================
+
+    def _pause_resume_clicked(self):
+        global _qt_tray
+
+        if self.on_pause_resume:
+            self.on_pause_resume()
+        self._update_pause_button()
+
+        if _qt_tray is not None:
+            _qt_tray.refresh_pause_text()
+
+    def _quit_clicked(self):
+        result = QMessageBox.question(
+            self,
+            "Quit",
+            "Are you sure you want to quit the application?",
+        )
+        if result == QMessageBox.Yes:
+            if self.on_quit:
+                self.on_quit()
+            else:
+                os._exit(0)
+
+    def closeEvent(self, event):
+        self.hide()
+        event.ignore()
+
+    # ===============
+    # UI REFRESHERS
+    # ===============
+
+    def _start_timers(self):
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self._update_status)
+        self.status_timer.start(2000)
+
+        self.login_timer = QTimer(self)
+        self.login_timer.timeout.connect(self._update_login_status)
+        self.login_timer.start(2000)
+
+        self.log_timer = QTimer(self)
+        self.log_timer.timeout.connect(self._update_logs)
+        self.log_timer.start(3000)
+
+        self._update_status()
+        self._update_login_status()
+        self._update_logs()
+
+    def _update_pause_button(self):
+        global _qt_tray
+
+        if self.get_pause_state and self.get_pause_state():
+            self.pause_btn.setText("Resume Automation")
+        else:
+            self.pause_btn.setText("Pause Automation")
+        
+        if _qt_tray is not None:
+            _qt_tray.refresh_pause_text()
+
+    def _update_status(self):
         status_file = os.path.join(base_dir(), "automation_status.txt")
 
         if os.path.exists(status_file):
-
-            with open(status_file, "r") as f:
-                status = f.read().strip()
-
-            if status == "RUNNING":
-                status_var.set("Running 🟢")
-                status_label.configure(bootstyle="success")
-
-            elif status == "PAUSED":
-                status_var.set("Paused 🟡")
-                status_label.configure(bootstyle="warning")
-
+            try:
+                with open(status_file, "r", encoding="utf-8") as f:
+                    raw_status = f.read().strip().upper()
+            except Exception:
+                raw_status = "UNKNOWN"
         else:
-            status_var.set("Unknown ⚪")
+            raw_status = "UNKNOWN"
 
-        root.after(2000, update_status)
+        if raw_status == "RUNNING":
+            self.automation_card.set_value("Running")
+            self.automation_card.set_color("#00bc8c")
+            self.quick_status.setText("Running")
+            self.quick_status.setStyleSheet("color: #00bc8c; font-weight: 700;")
+        elif raw_status == "PAUSED":
+            self.automation_card.set_value("Paused")
+            self.automation_card.set_color("#f39c12")
+            self.quick_status.setText("Paused")
+            self.quick_status.setStyleSheet("color: #f39c12; font-weight: 700;")
+        else:
+            self.automation_card.set_value("Unknown")
+            self.automation_card.set_color("#e64e30")
+            self.quick_status.setText("Unknown")
+            self.quick_status.setStyleSheet("color: #e64e30; font-weight: 700;")
 
-    update_status()                                                                                                         # Start updating the process
+        current_headless = os.getenv("IS_HEADLESS", "")
+        if str(current_headless).strip().lower() in ("1", "true", "yes"):
+            self.browser_card.set_value("Headless")
+            self.browser_card.set_color("#5dade2")
+            self.quick_mode.setText("Headless")
+            self.quick_mode.setStyleSheet("color: #5dade2;")
+        else:
+            self.browser_card.set_value("Visible Browser")
+            self.browser_card.set_color("#00bc8c")
+            self.quick_mode.setText("Visible Browser")
+            self.quick_mode.setStyleSheet("color: #00bc8c;")
 
-    #===============
-    # AHA LOGIN TAB
-    #===============
+        interval_text = os.getenv("INTERVAL", "")
+        self.interval_card.set_value(f"{interval_text} sec")
+        self.interval_card.set_color("#f39c12")
 
-    login_tab = ScrollableFrame(notebook)
-    notebook.add(login_tab, text="AHA Login")                                                                               # New tab for credentials
+        queue_file = os.path.join(base_dir(), "queue_status.txt")
+        if os.path.exists(queue_file):
+            try:
+                with open(queue_file, "r", encoding="utf-8") as f:
+                    queue_count_int = int(f.read().strip())
+            except Exception:
+                queue_count_int = -1
+        else:
+            queue_count_int = 0
 
-    login_status_var = tb.StringVar(value="Checking login state...")
+        if queue_count_int < 0:
+            self.queue_card.set_value("? task(s)")
+            self.queue_card.set_color("#e64e30")
+            self.quick_queue.setText("? task(s)")
+            self.quick_queue.setStyleSheet("color: #e64e30;")
+        else:
+            self.queue_card.set_value(f"{queue_count_int} task(s)")
+            self.quick_queue.setText(f"{queue_count_int} task(s)")
 
-    status_frame = tb.Frame(login_tab.scrollable_frame)
-    status_frame.pack(fill="x", pady=10)
+            if queue_count_int == 0:
+                queue_color = "#00bc8c"
+            elif 1 <= queue_count_int <= 3:
+                queue_color = "#f39c12"
+            else:
+                queue_color = "#e64e30"
 
-    tb.Label(status_frame, text="AHA Login Status:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=10)
-    tb.Label(status_frame, textvariable=login_status_var, bootstyle="info").pack(side="left")
+            self.queue_card.set_color(queue_color)
+            self.quick_queue.setStyleSheet(f"color: {queue_color};")
 
-    login_variables = {
-        "AHA Username": "AHA_USERNAME",
-        "AHA Password": "AHA_PASSWORD"
-    }
+        self._update_pause_button()
 
-    for label, env_var in login_variables.items():
-        frame = tb.Frame(login_tab.scrollable_frame)
-        frame.pack(fill="x", padx=10, pady=6)
-
-        tb.Label(frame, text=label, width=28).pack(side="left")
-        value = tb.StringVar(value=os.getenv(env_var, ""))
-
-        # Mask password field
-        show_char = "*" if "Password" in label else None
-        entry = tb.Entry(frame, textvariable=value, width=50, show=show_char)
-        entry.pack(side="left", fill="x", expand=True)
-
-        entries[env_var] = value
-
-    #====================
-    # AHA Login Status
-    #====================
-    def update_login_status():
-        """
-        Updates the login status label based on whether aha_auth.json exists.
-        """
+    def _update_login_status(self):
         aha_auth_file = Path(base_dir()) / "aha_auth.json"
         if aha_auth_file.exists():
-            login_status_var.set("Signed In ✅")
+            text = "Signed In"
+            color = "#00bc8c"
         else:
-            login_status_var.set("Not Signed In ⚪")
-        # Refresh every 2 seconds
-        root.after(2000, update_login_status)
+            text = "Not Signed In"
+            color = "#adb5bd"
 
-    update_login_status()  # Start the dynamic status updater
+        self.aha_login_label.setText(text)
+        self.aha_login_label.setStyleSheet(f"color: {color}; font-weight: 700;")
+        self.quick_login.setText(text)
+        self.quick_login.setStyleSheet(f"color: {color};")
 
-    #============
-    # EMAIL TAB
-    #============
-
-    email_tab = ScrollableFrame(notebook)
-    notebook.add(email_tab, text="Email Settings")
-    email_variables= {"Sender Email Address": "SENDER_EMAIL",
-                      "Keyword Before Name": "KEYWORD_NAME",
-                       "Automation Interval (seconds)": "INTERVAL"}                                                             # Variables in this tab
-    
-    for label, env_var in email_variables.items():
-        frame = tb.Frame(email_tab.scrollable_frame)
-        frame.pack(fill="x", padx=10, pady=6)
-
-        tb.Label(frame, text=label, width=28).pack(side="left")
-        value = tb.StringVar(value=os.getenv(env_var, ""))
-
-        entry = tb.Entry(frame, textvariable=value, width=50)
-        entry.pack(side="left", fill="x", expand=True)
-
-        entries[env_var] = value
-
-    #============
-    # GOOGLE TAB
-    #============
-
-    google_tab = ScrollableFrame(notebook)
-    notebook.add(google_tab, text="Sheets Settings")
-    google_variables = {"RQI Service Account File": "SERVICE_ACCOUNT_RQI_JSON",
-                        "AHA Service Account File": "SERVICE_ACCOUNT_AHA_JSON",
-                        "AHA Google Sheet URL": "GOOGLE_SHEET_URL",
-                        "RQI Google Sheet ID": "SPREADSHEET_ID"}
-
-    for label, env_var in google_variables.items():
-        frame = tb.Frame(google_tab.scrollable_frame)
-        frame.pack(fill="x", padx=10, pady=6)
-
-        tb.Label(frame, text=label, width=28).pack(side="left")
-        value = tb.StringVar(value=os.getenv(env_var, ""))
-
-        entry = tb.Entry(frame, textvariable=value, width=50)
-        entry.pack(side="left", fill="x", expand=True)
-
-        entries[env_var] = value
-
-    #====================
-    # AUTHENTICATION TAB
-    #====================
-
-    auth_tab = ScrollableFrame(notebook)
-    notebook.add(auth_tab, text="Authentication Settings")
-    auth_variables = {"Azure Client ID": "CLIENT_ID","Azure Tenant ID": "TENANT_ID",
-                      "Highest Credential Access": "AUTHORITY", "App Permissions": "SCOPES",
-                      "Cache File": "CACHE_FILE"}
-
-    for label, env_var in auth_variables.items():
-        frame = tb.Frame(auth_tab.scrollable_frame)
-        frame.pack(fill="x", padx=10, pady=6)
-
-        tb.Label(frame, text=label, width=28).pack(side="left")
-        value = tb.StringVar(value=os.getenv(env_var, ""))
-
-        entry = tb.Entry(frame, textvariable=value, width=50)
-        entry.pack(side="left", fill="x", expand=True)
-
-        entries[env_var] = value
-    
-    #============
-    # OTHER TAB
-    #============
-
-    other_tab = ScrollableFrame(notebook)
-    notebook.add(other_tab, text="Other Settings")
-    other_variables = {"Orgnatizaiton Name": "ORG_NAME",
-                        "Run Headless": "IS_HEADLESS"}
-
-    for label, env_var in other_variables.items():
-        frame = tb.Frame(other_tab.scrollable_frame)
-        frame.pack(fill="x", padx=10, pady=6)
-
-        tb.Label(frame, text=label, width=28).pack(side="left")
-        value = tb.StringVar(value=os.getenv(env_var, ""))
-
-        entry = tb.Entry(frame, textvariable=value, width=50)
-        entry.pack(side="left", fill="x", expand=True)
-
-        entries[env_var] = value
-
-    #=========
-    # LOG TAB
-    #=========
-
-    log_tab = tb.Frame(notebook)
-    notebook.add(log_tab, text="System Logs")
-
-    log_text = tb.Text(log_tab, height=30)
-    log_text.pack(fill="both", expand=True, padx=10, pady=10)
-    
-    def update_logs():
+    def _update_logs(self):
         current_log_file = log_file()
         if os.path.exists(current_log_file):
             with open(current_log_file, "r", encoding="utf-8") as f:
-                content = f.read()
+                self.log_text.setPlainText(f.read())
 
-            log_text.delete("1.0", "end")
-            log_text.insert("end", content)
-            log_text.see("end")
+    # ==========
+    # STYLES
+    # ==========
 
-        root.after(3000, update_logs)
+    def _apply_styles(self):
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1e1f22;
+            }
+            QLabel#MainTitle {
+                color: white;
+                font-size: 24px;
+                font-weight: 700;
+            }
+            QFrame#StatusCard {
+                background-color: #2b2d31;
+                border: 1px solid #3b3d42;
+                border-radius: 16px;
+            }
+            QLabel#StatusCardTitle {
+                color: #bfc5d2;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QLabel#StatusCardValue {
+                color: white;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            QTabWidget::pane {
+                border: 1px solid #3b3d42;
+                border-radius: 12px;
+                background: #2b2d31;
+            }
+            QTabBar::tab {
+                background: #2b2d31;
+                color: #d7dce2;
+                padding: 10px 16px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: #3b82f6;
+                color: white;
+            }
+            QPushButton {
+                background-color: #2f6fed;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                padding: 10px 16px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #3b82f6;
+            }
+            QLineEdit, QTextEdit {
+                background-color: #1f2125;
+                color: white;
+                border: 1px solid #3b3d42;
+                border-radius: 10px;
+                padding: 8px;
+            }
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+        """)
 
-    update_logs()
+# ==========
+# WINDOW ENTRY
+# ==========
 
-    buttons(root, entries)
+_qt_app = None
+_qt_window = None
+_qt_tray = None
 
-    root.mainloop()
+def open_settings(on_pause_resume=None, on_quit=None, get_pause_state=None, on_ready=None):
+    global _qt_app, _qt_window, _qt_tray
 
-#######################################
-# FOR TESTING ONLY
-#######################################
+    app = QApplication.instance()
+    if app is None:
+        _qt_app = QApplication(sys.argv)
+        app = _qt_app
+
+    if _qt_window is None:
+        _qt_window = SettingsWindow(on_pause_resume=on_pause_resume, on_quit=on_quit, get_pause_state=get_pause_state, on_ready=on_ready,)
+
+    if _qt_tray is None:
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            _qt_tray = AppTrayIcon(_qt_window, on_pause_resume=on_pause_resume, on_quit=on_quit, get_pause_state=get_pause_state,)
+            _qt_tray.show()
+
+        else:
+            logging.warning("System tray is not available on this system.")
+
+    _qt_window.show()
+    _qt_window.raise_()
+    _qt_window.activateWindow()
+
+    if on_ready:
+        on_ready(_qt_window)
+
+    if _qt_app is not None:
+        _qt_app.exec()
+
+
+# =============
+# FOR TESTING
+# =============
+
 if __name__ == "__main__":
     open_settings()

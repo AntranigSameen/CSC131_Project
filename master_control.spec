@@ -10,6 +10,7 @@ project_root = Path.cwd()
 hiddenimports = []
 hiddenimports += collect_submodules("Proper_MS")
 hiddenimports += collect_submodules("RQI_EmailSheets")
+hiddenimports += collect_submodules("PySide6")
 
 datas = [
     (str(project_root / ".env"), "."),
@@ -27,7 +28,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        "tkinter",
+        "ttkbootstrap",
+        "PyQt5",
+        "PyQt6",
+        "PySide2",
+    ],
     noarchive=False,
     optimize=0,
 )
@@ -43,7 +50,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -58,7 +65,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="master_control",
 )
