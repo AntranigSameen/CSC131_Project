@@ -26,13 +26,13 @@ os.environ["SSL_CERT_FILE"] = certifi.where()                                   
 ensure_external_env()                                                                                                                # Make sure the writable external .env file exists
 load_dotenv(dotenv_path=env_file(), override=True)                                                                                   # Load .env variables from writable env file
 
-INTERVAL = int(os.getenv("INTERVAL", "10"))                                                                                          # Default to 10 seconds if not set
+INTERVAL = int(os.getenv("INTERVAL") or "10")                                                                                          # Default to 10 seconds if not set
 
 #==============
 # MORE IMPORTS
 #==============
 
-from gui import open_settings
+from gui import open_settings, prompt_for_aha_credentials
 from setup_login import aha_login_check
 from outlook_authentication import authenticate
 from run_helper import run_cycle
@@ -59,6 +59,42 @@ pause_event = threading.Event()                                                 
 pause_event.set()                                                                                                                    # Start unpaused
 
 automation_queue = Queue(maxsize=5)                                                                                                  # Queue to process automation tasks
+
+background_services_started = False                                                                                                  # Prevent startup code from launching duplicate background threads
+
+def aha_credentials_exist():
+    settings = load_settings()                                                                                                       # Load latest .env values before checking AHA credentials
+    return bool(settings["AHA_USERNAME"].strip()) and bool(settings["AHA_PASSWORD"].strip())                                         # Only True when both username and password exist
+
+
+def aha_session_exists():
+    aha_auth_file = Path(base_dir()) / "aha_auth.json"                                                                               # Saved Playwright AHA login state file
+    return aha_auth_file.exists()                                                                                                    # True when session file already exists
+
+
+def bootstrap_after_gui(window):
+    global background_services_started
+
+    if background_services_started:
+        return                                                                                                                       # Prevent bootstrap from running more than once
+
+    if not aha_session_exists() and not aha_credentials_exist():
+        logging.info("No saved AHA session or AHA credentials found. Prompting user from GUI.")
+        credentials_saved = prompt_for_aha_credentials(window)
+
+        if not credentials_saved:
+            logging.warning("User cancelled AHA credential prompt. Background services not started.")
+            return                                                                                                                   # Leave GUI open, but do not start automation yet
+
+    if not aha_session_exists():
+        logging.info("No saved AHA session found. Running automated AHA login.")
+        aha_login_check()                                                                                                            # Use saved env credentials to log in and save aha_auth.json
+        logging.info("AHA login completed and state saved.")
+    else:
+        logging.info("Using existing AHA login state.")
+
+    start_background_services()                                                                                                      # Start automation only after AHA setup is ready
+    background_services_started = True                                                                                               # Mark startup as complete so it does not run twice
 
 def is_automation_paused():
     return automation_paused                                                                                                         # Return current pause state for GUI/tray button text
@@ -134,13 +170,6 @@ def automation_loop():
     logging.info("Starting the Automation Script...")                                                                                # Log the start of the master control script
     set_status("RUNNING")                                                                                                            # Set status for program
 
-    aha_auth_file = Path(base_dir()) / "aha_auth.json"                                                                               # Checks for AHA log in file
-    if not aha_auth_file.exists():
-        aha_login_check()  # user will manually log in once                                                                          # Run AHA log in manually if no file
-        logging.info("AHA login completed and state saved.")                                                                         # Logs the login
-    else:
-        logging.info("Using existing AHA login state: %s", aha_auth_file)                                                            # Logs whether file was used
-
     token = authenticate()                                                                                                           # authenticate with Outlook and return token
     if not token:
         logging.error("Authentication failure. No Access Token.")                                                                    # Stop automation loop if Outlook auth fails
@@ -189,7 +218,8 @@ def automation_loop():
 
 def open_settings_window():
     logging.info("Opening settings window")
-    open_settings(on_pause_resume=toggle_pause, on_quit=quit_application, get_pause_state=is_automation_paused,)                     # Launch main GUI and pass control callbacks
+    open_settings(on_pause_resume=toggle_pause, on_quit=quit_application,                                                            # Open GUI first, then run first-run AHA bootstrap
+                  get_pause_state=is_automation_paused, on_ready=bootstrap_after_gui,)
 
 # ==================
 # BACKGROUND STARTUP
@@ -207,6 +237,5 @@ def start_background_services():
 #=============
 
 if __name__ == "__main__":
-    start_background_services()                                                                                                      # Start background threads first
     logging.info("Opening Settings GUI on startup")
     open_settings_window()                                                                                                           # GUI in Main Thread

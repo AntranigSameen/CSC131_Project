@@ -12,7 +12,7 @@ from dotenv import set_key, load_dotenv
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QTabWidget,
-                               QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu,)
+                               QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 
@@ -89,18 +89,75 @@ def sign_out():
     if aha_auth_file.exists():
         aha_auth_file.unlink()                                                                                                        # Delete saved login state so user must sign in again
         logging.info("User signed out: deleted AHA login state")
-        QMessageBox.information(
-            None,
-            "Signed Out",
-            "AHA login state cleared. You will need to sign in next time.",
-        )
-    else:
-        QMessageBox.information(
-            None,
-            "Info",
-            "No existing AHA login state to delete.",
-        )
+        QMessageBox.information(None, "Signed Out", "AHA login state cleared. You will need to sign in next time.",)
 
+    else:
+        QMessageBox.information(None, "Info", "No existing AHA login state to delete.",)
+
+# ==========================
+# FIRST RUN AHA CREDENTIALS
+# ==========================
+
+class AhaCredentialsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.setWindowTitle("AHA Login Required")
+        self.setModal(True)
+        self.resize(420, 190)                                                                                                         # Dialog size for first-run credential prompt
+
+        layout = QVBoxLayout(self)
+
+        info = QLabel("Enter your AHA username and password.\n"
+                      "These will be saved to your .env file and used for future AHA logins.")
+        
+        info.setWordWrap(True)                                                                                                        # Allow explanatory text to wrap cleanly
+        layout.addWidget(info)
+
+        form = QFormLayout()
+
+        self.username_edit = QLineEdit(os.getenv("AHA_USERNAME", ""))                                                                 # Pre-fill with existing username if present
+        self.password_edit = QLineEdit(os.getenv("AHA_PASSWORD", ""))                                                                 # Pre-fill with existing password if present
+        self.password_edit.setEchoMode(QLineEdit.Password)                                                                            # Hide password characters while typing
+
+        form.addRow("AHA Username", self.username_edit)
+        form.addRow("AHA Password", self.password_edit)
+
+        layout.addLayout(form)
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)                                           # Save or cancel buttons for first-run prompt
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+    def get_values(self):
+        return self.username_edit.text().strip(), self.password_edit.text().strip()                                                   # Return cleaned username/password values
+
+
+def save_single_setting(key, value):
+    set_key(CONFIG_FILE, key, value)                                                                                                  # Save one key/value pair into writable .env file
+    load_dotenv(CONFIG_FILE, override=True)                                                                                           # Reload current process environment after saving
+
+
+def prompt_for_aha_credentials(parent=None):
+    dialog = AhaCredentialsDialog(parent)                                                                                             # Create modal first-run AHA credential dialog
+
+    while True:
+        result = dialog.exec()
+
+        if result != QDialog.Accepted:
+            return False                                                                                                              # User cancelled prompt, so do not start automation
+
+        username, password = dialog.get_values()
+
+        if not username or not password:
+            QMessageBox.warning(parent, "Missing Information", "Both AHA username and password are required.")
+            continue                                                                                                                  # Keep prompting until both values are entered
+
+        save_single_setting("AHA_USERNAME", username)                                                                                 # Save username to writable .env file
+        save_single_setting("AHA_PASSWORD", password)                                                                                 # Save password to writable .env file
+        logging.info("AHA credentials saved from first-run GUI prompt")
+        return True                                                                                                                   # Credentials successfully saved
 
 # ==============
 # STATUS CARD
@@ -244,9 +301,6 @@ class SettingsWindow(QMainWindow):
 
         self._build_ui()                                                                                                              # Create all GUI widgets and layouts
         self._start_timers()                                                                                                          # Start automatic status/login/log refresh timers
-
-        if on_ready:
-            on_ready(self)                                                                                                            # Optional callback after window is fully created
     
     # ==================
     # TRAY NOTIFICATION
@@ -670,7 +724,7 @@ class SettingsWindow(QMainWindow):
 
             was_near_bottom = self._is_log_near_bottom()                                                                              # Decide whether to auto-scroll after append
 
-            with open(current_log_file, "r", encoding="utf-8") as f:
+            with open(current_log_file, "r", encoding="utf-8", errors="replace") as f:
                 # First load: read entire file once
                 if not self._log_initialized:
                     content = f.read()                                                                                                # Read complete log file on first load
@@ -837,7 +891,7 @@ def open_settings(on_pause_resume=None, on_quit=None, get_pause_state=None, on_r
     _qt_window.activateWindow()                                                                                                       # Focus main window
 
     if on_ready:
-        on_ready(_qt_window)                                                                                                          # Optional callback after window is shown
+        QTimer.singleShot(0, lambda: on_ready(_qt_window))                                                                            # Run startup bootstrap only after GUI event loop begins
 
     if _qt_app is not None:
         _qt_app.exec()                                                                                                                # Start Qt event loop when app was created here

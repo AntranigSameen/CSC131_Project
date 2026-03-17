@@ -779,24 +779,36 @@ def select_instructor(page, name_text="Sac State"):
     if instructor_box.count() == 0:
         instructor_box = page.get_by_role("combobox", name=re.compile(r"instructor", re.I))
 
-    instructor_box.first.wait_for(state="visible", timeout=30000)
+    instructor_box = instructor_box.first                                                                                            # Always work with the first matched instructor field
+    instructor_box.wait_for(state="visible", timeout=30000)                                                                          # Wait until instructor field is visible on page
+
+    # Wait until the field is enabled before clicking
+    for _ in range(60):                                                                                                              # Wait up to about 30 seconds for disabled field to become enabled
+        disabled_attr = instructor_box.get_attribute("disabled")
+        aria_disabled = instructor_box.get_attribute("aria-disabled")
+        if disabled_attr is None and aria_disabled != "true":
+            break                                                                                                                    # Field is ready once disabled state is gone
+        page.wait_for_timeout(500)
+    else:
+        raise RuntimeError("Instructor field was visible but stayed disabled.")                                                      # Fail clearly instead of timing out on click
 
     # Click once to focus
-    instructor_box.first.click()
+    instructor_box.click()
     page.wait_for_timeout(200)
 
     # Type to filter
     try:
-        instructor_box.first.fill(name_text)
+        instructor_box.fill(name_text)
     except Exception:
-        instructor_box.first.click()
+        instructor_box.click()
         page.keyboard.type(name_text)
+
     # Wait for the dropdown options to appear
     try:
-        page.locator("[role='listbox']").first.wait_for(state="visible", timeout=800)
+        page.locator("[role='listbox']").first.wait_for(state="visible", timeout=1500)                                               # Give dropdown a little longer to appear
     except Exception:
         # Some react-select implementations don't use role=listbox; a tiny delay is enough
-        page.wait_for_timeout(150)
+        page.wait_for_timeout(300)
 
     # Pick first filtered result (ArrowDown + Enter)
     page.keyboard.press("ArrowDown")
