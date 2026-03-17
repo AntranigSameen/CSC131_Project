@@ -10,25 +10,9 @@ from pathlib import Path
 
 from dotenv import set_key, load_dotenv
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QIcon
-from PySide6.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QWidget,
-    QFrame,
-    QLabel,
-    QPushButton,
-    QVBoxLayout,
-    QHBoxLayout,
-    QTabWidget,
-    QScrollArea,
-    QLineEdit,
-    QMessageBox,
-    QTextEdit,
-    QFormLayout,
-    QSystemTrayIcon,
-    QMenu,
-)
+from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QTabWidget,
+                               QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 
@@ -245,14 +229,18 @@ class SettingsWindow(QMainWindow):
     def __init__(self, on_pause_resume=None, on_quit=None, get_pause_state=None, on_ready=None):
         super().__init__()
 
+        self.setWindowIcon(QIcon(resource_path("icon.png")))
         self.on_pause_resume = on_pause_resume
         self.on_quit = on_quit
         self.get_pause_state = get_pause_state
         self.entries = {}
 
-        self.setWindowTitle("Automation Control Center")
+        self.setWindowTitle("Automation Machine")
         self.resize(1360, 820)
         self.setMinimumSize(1120, 700)
+
+        self._log_position = 0
+        self._log_initialized = False
 
         self._build_ui()
         self._start_timers()
@@ -458,8 +446,9 @@ class SettingsWindow(QMainWindow):
         layout = QVBoxLayout(page)
 
         title = QLabel("Live Application Logs")
-        self.log_text = QTextEdit()
+        self.log_text = QPlainTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.setLineWrapMode(QPlainTextEdit.NoWrap)
 
         layout.addWidget(title)
         layout.addWidget(self.log_text)
@@ -617,15 +606,93 @@ class SettingsWindow(QMainWindow):
         self.quick_login.setText(text)
         self.quick_login.setStyleSheet(f"color: {color};")
 
+    # ===================
+    # LOG VIEWER HELPERS
+    # ===================
+
+    def _is_log_near_bottom(self):
+        scrollbar = self.log_text.verticalScrollBar()
+        return scrollbar.value() >= scrollbar.maximum() - 20
+
+    def _append_log_line(self, line: str):
+        cursor = self.log_text.textCursor()
+        cursor.movePosition(QTextCursor.End)
+
+        fmt = QTextCharFormat()
+
+        upper_line = line.upper()
+
+        if " - ERROR - " in upper_line or "ERROR:" in upper_line:                                                                                   # Color for Error Logs
+            fmt.setForeground(QColor("#e64e30"))
+
+        elif " - WARNING - " in upper_line or "WARNING:" in upper_line:                                                                             # Color for Warning Logs
+            fmt.setForeground(QColor("#f39c12"))
+
+        elif " - INFO - " in upper_line or "INFO:" in upper_line:                                                                                   # Color for Info Logs
+            fmt.setForeground(QColor("#5dade2"))
+
+        else:                                                                                                                                       # Color for Logs (default)
+            fmt.setForeground(QColor("#d7dce2"))
+
+        cursor.insertText(line, fmt)
+
+    def _append_log_text(self, text: str):
+        if not text:
+            return
+
+        lines = text.splitlines(keepends=True)
+        for line in lines:
+            self._append_log_line(line)
+
     def _update_logs(self):
         current_log_file = log_file()
-        if os.path.exists(current_log_file):
-            with open(current_log_file, "r", encoding="utf-8") as f:
-                self.log_text.setPlainText(f.read())
 
-    # ==========
+        if not os.path.exists(current_log_file):
+            return
+
+        try:
+            current_size = os.path.getsize(current_log_file)
+
+            # If log file was truncated or recreated, reset viewer state
+            if current_size < self._log_position:
+                self._log_position = 0
+                self._log_initialized = False
+                self.log_text.clear()
+
+            was_near_bottom = self._is_log_near_bottom()
+
+            with open(current_log_file, "r", encoding="utf-8") as f:
+                # First load: read entire file once
+                if not self._log_initialized:
+                    content = f.read()
+                    self.log_text.clear()
+                    self._append_log_text(content)
+                    self._log_position = f.tell()
+                    self._log_initialized = True
+
+                    scrollbar = self.log_text.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.maximum())
+
+                else:
+                    # Subsequent loads: append only new content
+                    f.seek(self._log_position)
+                    new_text = f.read()
+
+                    if new_text:
+                        self._append_log_text(new_text)
+
+                        if was_near_bottom:
+                            scrollbar = self.log_text.verticalScrollBar()
+                            scrollbar.setValue(scrollbar.maximum())
+
+                    self._log_position = f.tell()
+
+        except Exception as e:
+            logging.exception("Error updating log viewer: %s", e)
+
+    # =======
     # STYLES
-    # ==========
+    # =======
 
     def _apply_styles(self):
         self.setStyleSheet("""
@@ -641,6 +708,7 @@ class SettingsWindow(QMainWindow):
                 background-color: #2b2d31;
                 border: 1px solid #3b3d42;
                 border-radius: 16px;
+                padding: 6px;
             }
             QLabel#StatusCardTitle {
                 color: #bfc5d2;
@@ -680,12 +748,21 @@ class SettingsWindow(QMainWindow):
             QPushButton:hover {
                 background-color: #3b82f6;
             }
-            QLineEdit, QTextEdit {
+            QLineEdit {
                 background-color: #1f2125;
                 color: white;
                 border: 1px solid #3b3d42;
                 border-radius: 10px;
                 padding: 8px;
+            }
+            QPlainTextEdit {
+                background-color: #1f2125;
+                color: #d7dce2;
+                border: 1px solid #3b3d42;
+                border-radius: 10px;
+                padding: 8px;
+                font-family: Consolas;
+                font-size: 10pt;
             }
             QScrollArea {
                 border: none;
@@ -704,10 +781,21 @@ _qt_tray = None
 def open_settings(on_pause_resume=None, on_quit=None, get_pause_state=None, on_ready=None):
     global _qt_app, _qt_window, _qt_tray
 
+    # Enable high DPI scaling
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+
     app = QApplication.instance()
     if app is None:
         _qt_app = QApplication(sys.argv)
         app = _qt_app
+
+        app.setApplicationName("Automation Machine")                                                                                                # App Name
+        app.setOrganizationName("Sentient Grok")                                                                                                    # App Creator Name
+        app.setApplicationDisplayName("Automation Machine")                                                                                         # App Display Name
+
+        # Set global application icon
+        icon_path = resource_path("icon.png")
+        app.setWindowIcon(QIcon(icon_path))
 
     if _qt_window is None:
         _qt_window = SettingsWindow(on_pause_resume=on_pause_resume, on_quit=on_quit, get_pause_state=get_pause_state, on_ready=on_ready,)
