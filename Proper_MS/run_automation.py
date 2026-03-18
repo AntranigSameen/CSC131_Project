@@ -3,7 +3,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from utils import resource_path
+from utils import resource_path, base_dir
 from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
     expect,
@@ -17,10 +17,10 @@ except Exception:
     pass
 """
 
-ROOT = Path(__file__).resolve().parents[1]
+#ROOT = Path(__file__).resolve().parents[1]
 
 SERVICE_ACCOUNT_JSON = resource_path(os.getenv("SERVICE_ACCOUNT_AHA_JSON", "google_sheet_api_key.json"))  # google service account key file
-PROJECT_DIR = Path(__file__).resolve().parent  # folder that contains this script
+PROJECT_DIR = Path(base_dir())  # folder that contains this script
 SAVED_LOGIN = PROJECT_DIR / "aha_auth.json"  # saved Edge login state (created by setup_login.py)
 GOOGLE_SHEET_URL = os.getenv(
     "GOOGLE_SHEET_URL",
@@ -779,24 +779,36 @@ def select_instructor(page, name_text="Sac State"):
     if instructor_box.count() == 0:
         instructor_box = page.get_by_role("combobox", name=re.compile(r"instructor", re.I))
 
-    instructor_box.first.wait_for(state="visible", timeout=30000)
+    instructor_box = instructor_box.first                                                                                            # Always work with the first matched instructor field
+    instructor_box.wait_for(state="visible", timeout=30000)                                                                          # Wait until instructor field is visible on page
+
+    # Wait until the field is enabled before clicking
+    for _ in range(60):                                                                                                              # Wait up to about 30 seconds for disabled field to become enabled
+        disabled_attr = instructor_box.get_attribute("disabled")
+        aria_disabled = instructor_box.get_attribute("aria-disabled")
+        if disabled_attr is None and aria_disabled != "true":
+            break                                                                                                                    # Field is ready once disabled state is gone
+        page.wait_for_timeout(500)
+    else:
+        raise RuntimeError("Instructor field was visible but stayed disabled.")                                                      # Fail clearly instead of timing out on click
 
     # Click once to focus
-    instructor_box.first.click()
+    instructor_box.click()
     page.wait_for_timeout(200)
 
     # Type to filter
     try:
-        instructor_box.first.fill(name_text)
+        instructor_box.fill(name_text)
     except Exception:
-        instructor_box.first.click()
+        instructor_box.click()
         page.keyboard.type(name_text)
+
     # Wait for the dropdown options to appear
     try:
-        page.locator("[role='listbox']").first.wait_for(state="visible", timeout=800)
+        page.locator("[role='listbox']").first.wait_for(state="visible", timeout=1500)                                               # Give dropdown a little longer to appear
     except Exception:
         # Some react-select implementations don't use role=listbox; a tiny delay is enough
-        page.wait_for_timeout(150)
+        page.wait_for_timeout(300)
 
     # Pick first filtered result (ArrowDown + Enter)
     page.keyboard.press("ArrowDown")
@@ -904,22 +916,33 @@ def open_row_view(page, row_index: int = 0):
 
     row = rows.nth(row_index)
     row.wait_for(state="visible", timeout=30000)
+    
+    row.scroll_into_view_if_needed(timeout=5000)                                                        # CHANGES MADE FOR HEADLESS
+    page.wait_for_timeout(300)                                                                                      #
+                                                                                                                    #
+    action_cell = row.locator("td").nth(action_col)                                                                 #
+    action_cell.scroll_into_view_if_needed(timeout=5000)                                                            #
+    page.wait_for_timeout(300)                                                                          # CHANGES MADE FOR HEADLESS
+
+    """   THIS WAS CHANGED
     # One scroll
     row.scroll_into_view_if_needed()
     page.wait_for_timeout(100)
 
     action_cell = row.locator("td").nth(action_col)
+    """
 
     # open the menu
     opened = False
-    for attempt in range(3):
+    for attempt in range(5):
         clickable = first_visible(action_cell.locator("button, [role='button'], a, span, div"))
         if clickable is not None:
             try:
-                clickable.click(timeout=2000)
+                clickable.scroll_into_view_if_needed(timeout=3000)
+                clickable.click(timeout=3000, force=True)
             except Exception:
                 click_real_element(page, clickable)
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(500)
 
         # Did the menu open?
         if first_visible(_view_item_locator(page)) is not None:
@@ -927,6 +950,7 @@ def open_row_view(page, row_index: int = 0):
             break
 
     if not opened:
+        save_error_screenshot(page, "action_menu_failed")
         raise RuntimeError("Could not open the Action menu (three dots).")
 
     view_item = first_visible(_view_item_locator(page))
@@ -1454,6 +1478,7 @@ def run_demo(name, date, headless: bool = False):
 
 
     # Save what we used (debug)
+    """
     try:
         (screenshot_folder / "email_instructor_date.txt").write_text(
             f"instructor={instructor_name}\n"
@@ -1465,16 +1490,18 @@ def run_demo(name, date, headless: bool = False):
         )
     except Exception:
         pass
-
+"""
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            channel="msedge",
-            headless=headless,
-            args=["--start-maximized"],
-        )
+
+        launch_args = {"channel": "msedge", "headless": headless,}
+
+        if not headless:
+            launch_args["args"] = ["--start-maximized"]
+        browser = p.chromium.launch(**launch_args)
+
         context = browser.new_context(
             storage_state=str(SAVED_LOGIN),
-            no_viewport=True,
+            viewport={"width": 1920, "height": 1080}
         )
 
         page = context.new_page()
@@ -1578,14 +1605,14 @@ def run_demo(name, date, headless: bool = False):
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip() in {"1", "true", "True", "YES", "yes"}
 
-
+"""
 def main():
-    """Entry point.
+    Entry point.
     
     Env flags:
     - HEADLESS=1
     - PAUSE_AT_END=0
-    """
+    
     headless = _env_flag("HEADLESS", "0")
     print(                                                               
         "Starting run_automation... "
@@ -1599,3 +1626,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
