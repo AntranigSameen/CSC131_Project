@@ -74,7 +74,9 @@ def strip_html_tags(html_content: str) -> str:
     if not html_content:
         return ""
 
-    text = re.sub(r"<[^>]+>", "", html_content)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", html_content)
+    text = re.sub(r"(?i)</(p|div|li|tr|td|th|table|ul|ol|h[1-6])>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
     try:
         html_module = __import__("html")
         text = html_module.unescape(text)
@@ -83,14 +85,120 @@ def strip_html_tags(html_content: str) -> str:
     return text
 
 
-def extract_labeled_field(text: str, label: str) -> str:
+def _compact_label(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+DEFAULT_HEADERS = [
+    "LocationID",
+    "LocationName",
+    "UserID",
+    "FirstName",
+    "MiddleName",
+    "LastName",
+    "Email",
+    "JobCode",
+    "JobName",
+    "HireDate",
+    "Status",
+    "DateOfBirth",
+    "Gender",
+    "YearsOfExperience",
+    "ActiveDate",
+    "InactiveDate",
+    "Group",
+]
+
+
+def build_row_from_headers(fields: Dict[str, str], headers: List[str]) -> List[str]:
+    """Build a sheet row by matching sheet headers to extracted field names."""
+    normalized_fields = {_compact_label(k): (v or "") for k, v in (fields or {}).items()}
+    row: List[str] = []
+    for header in headers:
+        row.append(normalized_fields.get(_compact_label(header), ""))
+    return row
+
+
+def _label_to_pattern(label: str) -> str:
+    """Create a regex-safe pattern for labels allowing flexible whitespace."""
+    escaped = re.escape(label.strip())
+    return escaped.replace(r"\ ", r"\s*")
+
+
+def _extract_values_by_known_labels(
+    text: str,
+    label_aliases: Dict[str, List[str]],
+    stop_labels: List[str] | None = None,
+) -> Dict[str, str]:
+    """Extract values by slicing text between known label markers."""
+    if not text:
+        return {key: "" for key in label_aliases}
+
+    compact_to_key: Dict[str, str] = {}
+    all_aliases: List[str] = []
+    for key, aliases in label_aliases.items():
+        compact_to_key[_compact_label(key)] = key
+        for alias in aliases:
+            compact_to_key[_compact_label(alias)] = key
+            all_aliases.append(alias)
+
+    stop_labels = stop_labels or []
+
+    if not all_aliases and not stop_labels:
+        return {key: "" for key in label_aliases}
+
+    # Longer aliases first avoids partial matches such as "Date" before "Date Of Birth".
+    boundary_aliases = sorted(set(all_aliases + stop_labels), key=len, reverse=True)
+    alias_pattern = "|".join(_label_to_pattern(alias) for alias in boundary_aliases)
+    label_re = re.compile(rf"(?P<label>{alias_pattern})\s*:\s*", re.IGNORECASE)
+
+    clean_text = strip_html_tags(text or "")
+    clean_text = clean_text.replace("\xa0", " ").replace("\r", "\n")
+
+    matches = list(label_re.finditer(clean_text))
+    extracted: Dict[str, str] = {key: "" for key in label_aliases}
+    for idx, match in enumerate(matches):
+        raw_label = match.group("label")
+        canonical_key = compact_to_key.get(_compact_label(raw_label), "")
+        if not canonical_key or extracted.get(canonical_key):
+            continue
+
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(clean_text)
+        value = re.sub(r"\s+", " ", clean_text[start:end]).strip(" \t\n,;")
+        extracted[canonical_key] = value
+
+    return extracted
+
+
+def _iter_labeled_lines(text: str):
+    """Yield (normalized_label, value) pairs from label:value lines."""
+    text = strip_html_tags(text or "")
+    text = text.replace("\xa0", " ").replace("\r", "\n")
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or ":" not in line:
+            continue
+
+        label, value = line.split(":", 1)
+        label = label.strip()
+        value = value.strip()
+        if not label:
+            continue
+
+        yield _compact_label(label), value
+
+
+def extract_labeled_field(text: str, *labels: str) -> str:
     """
     Extract a field value that follows a label pattern like "Label: Value".
+    Accepts multiple label aliases such as "FirstName" and "First Name".
     """
-    pattern = rf"\b{re.escape(label)}\s*:\s*([^\n\r]+?)(?=\s+\w+\s*:|$)"
-    m = re.search(pattern, text, re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
+    expected = {_compact_label(label) for label in labels if label}
+    for normalized_label, value in _iter_labeled_lines(text):
+        if normalized_label in expected and value:
+            return value
     return ""
 
 
@@ -102,31 +210,30 @@ def extract_fields(text: str) -> dict:
         dict: Contains employee field keys used by the Google Sheet.
     """
     text = strip_html_tags(text or "")
+    clean = re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
 
-    clean = text.replace("\r", "")
-    clean = clean.replace("\t", " ")
-    clean = clean.replace("\n", " ")
-    clean = re.sub(r"\s+", " ", clean).strip()
-
-    fields = {
-        "LocationID": extract_labeled_field(clean, "LocationID"),
-        "LocationName": extract_labeled_field(clean, "LocationName"),
-        "UserID": extract_labeled_field(clean, "UserID"),
-        "FirstName": extract_labeled_field(clean, "FirstName"),
-        "MiddleName": extract_labeled_field(clean, "MiddleName"),
-        "LastName": extract_labeled_field(clean, "LastName"),
-        "Email": extract_labeled_field(clean, "Email"),
-        "JobCode": extract_labeled_field(clean, "JobCode"),
-        "JobName": extract_labeled_field(clean, "JobName"),
-        "HireDate": extract_labeled_field(clean, "HireDate"),
-        "Status": extract_labeled_field(clean, "Status"),
-        "DateOfBirth": extract_labeled_field(clean, "DateOfBirth"),
-        "Gender": extract_labeled_field(clean, "Gender"),
-        "YearsOfExperience": extract_labeled_field(clean, "YearsOfExperience"),
-        "ActiveDate": extract_labeled_field(clean, "ActiveDate"),
-        "InactiveDate": extract_labeled_field(clean, "InactiveDate"),
-        "Group": extract_labeled_field(clean, "Group"),
-    }
+    fields = _extract_values_by_known_labels(
+        text,
+        {
+            "LocationID": ["LocationID", "Location ID"],
+            "LocationName": ["LocationName", "Location Name"],
+            "UserID": ["UserID", "User ID"],
+            "FirstName": ["FirstName", "First Name"],
+            "MiddleName": ["MiddleName", "Middle Name"],
+            "LastName": ["LastName", "Last Name"],
+            "Email": ["Email", "Email Address"],
+            "JobCode": ["JobCode", "Job Code"],
+            "JobName": ["JobName", "Job Name"],
+            "HireDate": ["HireDate", "Hire Date"],
+            "Status": ["Status"],
+            "DateOfBirth": ["DateOfBirth", "Date Of Birth", "Date of Birth"],
+            "Gender": ["Gender"],
+            "YearsOfExperience": ["YearsOfExperience", "Years Of Experience", "Years of Experience"],
+            "ActiveDate": ["ActiveDate", "Active Date"],
+            "InactiveDate": ["InactiveDate", "Inactive Date"],
+            "Group": ["Group"],
+        },
+    )
 
     if not fields["Email"]:
         m = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", clean, re.I)
@@ -147,26 +254,39 @@ def extract_appointment_fields(text: str) -> dict:
         "where": ""
     }
 
-    text = strip_html_tags(text or "")
-    clean = text.replace("\r", "")
+    fields_by_label = _extract_values_by_known_labels(
+        text,
+        {
+            "for": ["For"],
+            "what": ["What"],
+            "when": ["When"],
+            "where": ["Where"],
+        },
+        stop_labels=[
+            "LocationID", "Location ID",
+            "LocationName", "Location Name",
+            "UserID", "User ID",
+            "FirstName", "First Name",
+            "MiddleName", "Middle Name",
+            "LastName", "Last Name",
+            "Email", "Email Address",
+            "JobCode", "Job Code",
+            "JobName", "Job Name",
+            "HireDate", "Hire Date",
+            "Status",
+            "DateOfBirth", "Date Of Birth", "Date of Birth",
+            "Gender",
+            "YearsOfExperience", "Years Of Experience", "Years of Experience",
+            "ActiveDate", "Active Date",
+            "InactiveDate", "Inactive Date",
+            "Group",
+        ],
+    )
 
-    for_match = re.search(r"\bFor:\s*([^\n]+?)(?=\s*(?:What:|LocationID:|$))", clean, re.IGNORECASE)
-    if for_match:
-        appointment["for_name"] = for_match.group(1).strip()
-
-    what_match = re.search(r"\bWhat:\s*([^\n]+?)(?=\s*(?:When:|LocationID:|$))", clean, re.IGNORECASE)
-    if what_match:
-        appointment["what"] = what_match.group(1).strip()
-
-    when_match = re.search(r"\bWhen:\s*([^\n]+?)(?=\s*(?:Where:|LocationID:|$))", clean, re.IGNORECASE)
-    if when_match:
-        appointment["when"] = when_match.group(1).strip()
-
-    where_match = re.search(r"\bWhere:\s*(.+?)(?=\s*LocationID:|$)", clean, re.IGNORECASE | re.DOTALL)
-    if where_match:
-        where_text = where_match.group(1).strip()
-        where_text = re.split(r"\s*LocationID:", where_text)[0].strip()
-        appointment["where"] = where_text
+    appointment["for_name"] = fields_by_label.get("for", "")
+    appointment["what"] = fields_by_label.get("what", "")
+    appointment["when"] = fields_by_label.get("when", "")
+    appointment["where"] = fields_by_label.get("where", "")
 
     return appointment
 
@@ -183,23 +303,87 @@ def parse_appointment_when(when_str: str):
         datetime_cls = datetime_mod.datetime
         timedelta_cls = datetime_mod.timedelta
 
+        normalized = re.sub(r"\s+", " ", when_str.replace("\u2013", "-").replace("\u2014", "-").replace("\xa0", " ")).strip()
+        normalized = re.sub(r"\b(noon)\b", "12:00 PM", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\b(midnight)\b", "12:00 AM", normalized, flags=re.IGNORECASE)
+
         duration_hours = 1
-        duration_match = re.search(r"\((\d+)\s*(hour|hr)s?\)", when_str, re.IGNORECASE)
+        duration_match = re.search(r"\((\d+)\s*(hour|hr)s?\)", normalized, re.IGNORECASE)
         if duration_match:
             duration_hours = int(duration_match.group(1))
         else:
-            duration_match = re.search(r"\((\d+)\s*(minute|min)s?\)", when_str, re.IGNORECASE)
+            duration_match = re.search(r"\((\d+)\s*(minute|min)s?\)", normalized, re.IGNORECASE)
             if duration_match:
                 duration_hours = int(duration_match.group(1)) / 60.0
 
-        clean_when = re.sub(r"\([^)]+\)", "", when_str).strip()
+        clean_when = re.sub(r"\([^)]+\)", "", normalized).strip(" ,")
+        clean_when = re.sub(r",?\s*(PST|PDT|MST|MDT|CST|CDT|EST|EDT|PT|MT|CT|ET)$", "", clean_when, flags=re.IGNORECASE).strip()
+
+        if ", " in clean_when:
+            clean_when = clean_when.replace(", ", ", ")
+
+        range_match = re.search(
+            r"^(?P<date>.+?\d{4})\s+(?P<start>\d{1,2}(?::\d{2})?\s*[AP]M)\s*(?:-|to)\s*(?P<end>\d{1,2}(?::\d{2})?\s*[AP]M)$",
+            clean_when,
+            re.IGNORECASE,
+        )
+
+        date_formats = [
+            "%A, %B %d, %Y",
+            "%B %d, %Y",
+            "%m/%d/%Y",
+            "%m-%d-%Y",
+        ]
+
+        time_formats = ["%I:%M %p", "%I %p", "%I:%M%p", "%I%p"]
+
+        def parse_date(date_str: str):
+            for fmt in date_formats:
+                try:
+                    return datetime_cls.strptime(date_str.strip(), fmt).date()
+                except ValueError:
+                    continue
+            return None
+
+        def parse_time(time_str: str):
+            cleaned_time = re.sub(r"\s+", " ", time_str.strip().upper())
+            cleaned_time = re.sub(r"(?<=\d)(AM|PM)$", r" \1", cleaned_time)
+            for fmt in time_formats:
+                try:
+                    return datetime_cls.strptime(cleaned_time, fmt).time()
+                except ValueError:
+                    continue
+            return None
+
+        if range_match:
+            parsed_date = parse_date(range_match.group("date"))
+            start_time = parse_time(range_match.group("start"))
+            end_time_only = parse_time(range_match.group("end"))
+            if parsed_date and start_time and end_time_only:
+                parsed_start = datetime_cls.combine(parsed_date, start_time)
+                parsed_end = datetime_cls.combine(parsed_date, end_time_only)
+                if parsed_end <= parsed_start:
+                    parsed_end += timedelta_cls(days=1)
+
+                return (
+                    parsed_start.strftime("%Y-%m-%dT%H:%M:%S"),
+                    parsed_end.strftime("%Y-%m-%dT%H:%M:%S"),
+                )
 
         formats = [
             "%A, %B %d, %Y %I:%M%p",
+            "%A, %B %d, %Y %I:%M %p",
             "%A, %B %d, %Y %I%p",
+            "%A, %B %d, %Y %I %p",
             "%B %d, %Y %I:%M%p",
+            "%B %d, %Y %I:%M %p",
+            "%B %d, %Y %I %p",
             "%m/%d/%Y %I:%M%p",
+            "%m/%d/%Y %I:%M %p",
+            "%m/%d/%Y %I %p",
             "%m-%d-%Y %I:%M%p",
+            "%m-%d-%Y %I:%M %p",
+            "%m-%d-%Y %I %p",
         ]
 
         parsed_start = None
@@ -211,7 +395,7 @@ def parse_appointment_when(when_str: str):
                 continue
 
         if not parsed_start:
-            logging.warning("Could not parse when string: %s", when_str)
+            logging.warning("Could not parse when string: raw=%r normalized=%r", when_str, clean_when)
             return None
 
         end_time = parsed_start + timedelta_cls(hours=duration_hours)
@@ -280,25 +464,7 @@ def get_worksheet():
 
     if not ws.get_all_values():
         ws.append_row(
-            [
-                "LocationID",
-                "LocationName",
-                "UserID",
-                "FirstName",
-                "MiddleName",
-                "LastName",
-                "Email",
-                "JobCode",
-                "JobName",
-                "HireDate",
-                "Status",
-                "DateOfBirth",
-                "Gender",
-                "YearsOfExperience",
-                "ActiveDate",
-                "InactiveDate",
-                "Group",
-            ],
+            DEFAULT_HEADERS,
             value_input_option="RAW",
         )
         logging.info("Header row added successfully")
@@ -512,6 +678,10 @@ def main():
     logging.info("Starting Outlook(Graph) -> Sheets processing...")
 
     ws = get_worksheet()
+    sheet_headers = ws.row_values(1)
+    if not sheet_headers:
+        sheet_headers = DEFAULT_HEADERS
+    logging.info("Using worksheet headers for mapping: %s", sheet_headers)
 
     token = authenticate()
     if not token:
@@ -556,25 +726,7 @@ def main():
             fields.get("LastName", "")
         ])).strip()
 
-        row = [
-            fields.get("LocationID", ""),
-            fields.get("LocationName", ""),
-            fields.get("UserID", ""),
-            fields.get("FirstName", ""),
-            fields.get("MiddleName", ""),
-            fields.get("LastName", ""),
-            fields.get("Email", ""),
-            fields.get("JobCode", ""),
-            fields.get("JobName", ""),
-            fields.get("HireDate", ""),
-            fields.get("Status", ""),
-            fields.get("DateOfBirth", ""),
-            fields.get("Gender", ""),
-            fields.get("YearsOfExperience", ""),
-            fields.get("ActiveDate", ""),
-            fields.get("InactiveDate", ""),
-            fields.get("Group", ""),
-        ]
+        row = build_row_from_headers(fields, sheet_headers)
 
         try:
             ws.append_row(row, value_input_option="RAW")
