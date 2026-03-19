@@ -9,10 +9,11 @@ import logging
 from pathlib import Path
 
 from dotenv import set_key, load_dotenv
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSize, QRect
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QTabWidget,
-                               QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,)
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
+                               QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
+                               QToolButton, QButtonGroup, QGraphicsDropShadowEffect,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 
@@ -311,6 +312,94 @@ class SettingsWindow(QMainWindow):
         if _qt_tray is not None:
             _qt_tray.showMessage(title, message, QSystemTrayIcon.Information, 3000)                                                   # Show temporary tray notification popup
 
+    # ==============
+    # SIDEBAR SETUP
+    # ==============
+
+    def _set_sidebar_page(self, index):
+        self.page_stack.setCurrentIndex(index)                                                                                        # Show the selected page in the main content area
+
+        for i, button in enumerate(self.sidebar_buttons):
+            is_active = (i == index)
+            button.setChecked(is_active)                                                                                              # Highlight only the currently selected sidebar button
+
+            if is_active:
+                glow = QGraphicsDropShadowEffect(self)
+                glow.setBlurRadius(18)                                                                                                # Soft active glow around selected sidebar button
+                glow.setOffset(0, 0)
+                button.setGraphicsEffect(glow)
+            else:
+                button.setGraphicsEffect(None)                                                                                        # Remove glow from non-active buttons
+
+        self._move_sidebar_indicator(index)                                                                                           # Move selected sidebar pill to the active button
+
+    def _add_sidebar_page(self, page_widget, tooltip_text, icon_text):
+        page_index = self.page_stack.addWidget(page_widget)                                                                           # Add page to stacked content area
+
+        button = QToolButton()
+        button.setObjectName("SidebarButton")
+        button.setText(icon_text)                                                                                                     # Use emoji/icon text inside circular sidebar button
+        button.setToolTip(tooltip_text)                                                                                               # Show page name when user hovers over icon
+        button.setCheckable(True)                                                                                                     # Allow active/selected button styling
+        button.setFixedSize(44, 44)                                                                                                   # Make sidebar button circular
+        button.setIconSize(QSize(18, 18))                                                                                             # Keep icon/text visually centered
+        button.clicked.connect(lambda checked=False, idx=page_index: self._set_sidebar_page(idx))                                     # Switch stacked page when icon is clicked
+
+        self.sidebar_buttons.append(button)                                                                                           # Store sidebar buttons so selected state can be updated
+        self.sidebar_layout.addWidget(button)                                                                                         # Add circular icon button to left sidebar
+
+    def _toggle_sidebar(self):
+        self.sidebar_collapsed = not self.sidebar_collapsed                                                                           # Flip between expanded and collapsed sidebar states
+
+        if self.sidebar_collapsed:
+            self.sidebar_frame.setFixedWidth(22)                                                                                      # Collapse sidebar down to a very thin rail
+            self.collapse_button.setText("»")                                                                                         # Show expand arrow while collapsed
+            self.collapse_button.setToolTip("Expand Sidebar")
+
+            for button in self.sidebar_buttons:
+                button.hide()                                                                                                         # Hide all sidebar page buttons when collapsed
+
+            self.sidebar_indicator.hide()                                                                                             # Hide active page indicator when sidebar is collapsed
+
+            self.collapse_button.setFixedSize(16, 48)                                                                                 # Tall narrow expand button for collapsed state
+            self.collapse_button.setStyleSheet("")                                                                                    # Let normal stylesheet apply cleanly
+
+        else:
+            self.sidebar_frame.setFixedWidth(68)                                                                                      # Restore normal sidebar width when expanded
+            self.collapse_button.setText("«")                                                                                         # Show collapse arrow while expanded
+            self.collapse_button.setToolTip("Collapse Sidebar")
+
+            self.collapse_button.setFixedSize(44, 28)                                                                                 # Restore top toggle button size
+
+            for button in self.sidebar_buttons:
+                button.show()                                                                                                         # Show sidebar page buttons again when expanded
+                button.setFixedSize(44, 44)                                                                                           # Restore small circular button size
+                button.setStyleSheet("font-size: 18px;")                                                                              # Restore normal emoji size
+
+            self.sidebar_indicator.show()                                                                                             # Show active page indicator again
+            self._move_sidebar_indicator(self.page_stack.currentIndex())                                                              # Re-align active page indicator after expanding
+
+    def _move_sidebar_indicator(self, index):
+        if not self.sidebar_buttons:
+            return                                                                                                                    # Nothing to move if no sidebar buttons exist yet
+
+        if index < 0 or index >= len(self.sidebar_buttons):
+            return                                                                                                                    # Ignore invalid page index
+
+        button = self.sidebar_buttons[index]
+        button_y = button.y()                                                                                                         # Vertical position of selected sidebar button
+        button_h = button.height()                                                                                                    # Height of selected sidebar button
+
+        pill_height = max(24, button_h - 10)                                                                                          # Make selected pill slightly smaller than the button
+        pill_y = button_y + (button_h - pill_height) // 2                                                                             # Center pill vertically beside selected button
+
+        self.sidebar_indicator.setGeometry(4, pill_y, 4, pill_height)                                                                 # Move left-side selection pill to active button
+
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._move_sidebar_indicator(self.page_stack.currentIndex())                                                                  # Keep selected pill aligned when window is resized
+
     # ==========
     # BUILD UI
     # ==========
@@ -324,7 +413,7 @@ class SettingsWindow(QMainWindow):
         root.setSpacing(10)                                                                                                           # Vertical spacing between major sections
 
         header = QVBoxLayout()
-        title = QLabel("Automation Control Center")
+        title = QLabel("Automation Machine")
         title.setObjectName("MainTitle")                                                                                              # Used by stylesheet for title formatting
         header.addWidget(title)
         root.addLayout(header)
@@ -377,16 +466,53 @@ class SettingsWindow(QMainWindow):
 
         root.addLayout(toolbar)
 
-        self.tabs = QTabWidget()
-        root.addWidget(self.tabs, 1)                                                                                                  # Main tab area fills remaining window space
+        content_row = QHBoxLayout()
+        content_row.setSpacing(6)                                                                                                     # Tight spacing between sidebar and main content
 
-        self._build_overview_tab()                                                                                                    # Dashboard tab
-        self._build_aha_tab()                                                                                                         # AHA credential tab
-        self._build_email_tab()                                                                                                       # Email settings tab
-        self._build_sheets_tab()                                                                                                      # Google Sheets settings tab
-        self._build_auth_tab()                                                                                                        # Microsoft auth settings tab
-        self._build_general_tab()                                                                                                     # General app settings tab
-        self._build_logs_tab()                                                                                                        # Live log viewer tab
+        self.sidebar_frame = QFrame()
+        self.sidebar_frame.setObjectName("SidebarFrame")                                                                              # Styled container for left-side circular navigation buttons
+        self.sidebar_frame.setFixedWidth(68)                                                                                          # Thin sidebar width for compact icon rail
+        self.sidebar_collapsed = False                                                                                                # Track whether sidebar is collapsed
+
+        self.sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        self.sidebar_layout.setContentsMargins(10, 10, 10, 10)
+        self.sidebar_layout.setSpacing(10)                                                                                            # Tight spacing between smaller circular buttons
+        self.sidebar_layout.setAlignment(Qt.AlignTop)
+
+        self.collapse_button = QToolButton()
+        self.collapse_button.setObjectName("SidebarCollapseButton")
+        self.collapse_button.setText("«")                                                                                             # Collapse arrow shown at top of sidebar
+        self.collapse_button.setToolTip("Collapse Sidebar")
+        self.collapse_button.setFixedSize(44, 28)
+        self.collapse_button.clicked.connect(self._toggle_sidebar)                                                                    # Collapse or expand left sidebar when clicked
+        self.sidebar_layout.addWidget(self.collapse_button, alignment=Qt.AlignTop | Qt.AlignHCenter)                                  # Keep collapse/expand button pinned at the top of the sidebar
+
+        self.sidebar_indicator = QFrame(self.sidebar_frame)
+        self.sidebar_indicator.setObjectName("SidebarIndicator")                                                                      # Vertical pill showing which page is currently selected
+        self.sidebar_indicator.setGeometry(QRect(4, 60, 4, 24))
+        self.sidebar_indicator.raise_()
+
+        self.sidebar_buttons = []                                                                                                     # Keep references so selected sidebar button can be highlighted
+
+        self.page_stack = QStackedWidget()
+        self.page_stack.setObjectName("ContentStack")                                                                                 # Main right-side content area that replaces QTabWidget
+
+        content_row.addWidget(self.sidebar_frame)
+        content_row.addWidget(self.page_stack, 1)                                                                                     # Right-side page area takes remaining width
+
+        root.addLayout(content_row, 1)
+
+        self._build_overview_tab()                                                                                                    # Dashboard page
+        self._build_aha_tab()                                                                                                         # AHA credentials page
+        self._build_email_tab()                                                                                                       # Email settings page
+        self._build_sheets_tab()                                                                                                      # Google Sheets settings page
+        self._build_auth_tab()                                                                                                        # Microsoft authentication settings page
+        self._build_general_tab()                                                                                                     # General settings page
+        self._build_logs_tab()                                                                                                        # Live logs page
+
+        if self.sidebar_buttons:
+            self._set_sidebar_page(0)                                                                                                 # Start on the Overview page when GUI opens
+            QTimer.singleShot(0, lambda: self._move_sidebar_indicator(0))                                                             # Reposition selected pill after layout finishes
 
         self._apply_styles()                                                                                                          # Apply full application stylesheet
 
@@ -413,7 +539,7 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(self.quick_queue)
         layout.addStretch(1)                                                                                                          # Push content upward
 
-        self.tabs.addTab(ScrollablePage(page), "Overview")                                                                            # Add overview tab to tab widget
+        self._add_sidebar_page(ScrollablePage(page), "Overview", "🏠")                                                                # Add overview tab to sidebar navigation
 
     def _build_aha_tab(self):
         page = QWidget()
@@ -432,7 +558,7 @@ class SettingsWindow(QMainWindow):
         form.addRow("AHA Username", aha_user)
         form.addRow("AHA Password", aha_pass)
 
-        self.tabs.addTab(ScrollablePage(page), "AHA Login")
+        self._add_sidebar_page(ScrollablePage(page), "AHA Login", "🔐")                                                              # Add AHA login page to sidebar navigation
 
     def _build_email_tab(self):
         page = QWidget()
@@ -449,7 +575,7 @@ class SettingsWindow(QMainWindow):
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             form.addRow(label, edit)
 
-        self.tabs.addTab(ScrollablePage(page), "Email")
+        self._add_sidebar_page(ScrollablePage(page), "Email", "📧")                                                                  # Add Email settings page to sidebar navigation
 
     def _build_sheets_tab(self):
         page = QWidget()
@@ -467,7 +593,7 @@ class SettingsWindow(QMainWindow):
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             form.addRow(label, edit)
 
-        self.tabs.addTab(ScrollablePage(page), "Sheets")
+        self._add_sidebar_page(ScrollablePage(page), "Sheets", "📄")                                                                 # Add Sheets page to sidebar navigation
 
     def _build_auth_tab(self):
         page = QWidget()
@@ -486,7 +612,7 @@ class SettingsWindow(QMainWindow):
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             form.addRow(label, edit)
 
-        self.tabs.addTab(ScrollablePage(page), "Authentication")
+        self._add_sidebar_page(ScrollablePage(page), "Authentication", "🪪")                                                         # Add Authentication page to sidebar navigation
 
     def _build_general_tab(self):
         page = QWidget()
@@ -502,7 +628,7 @@ class SettingsWindow(QMainWindow):
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             form.addRow(label, edit)
 
-        self.tabs.addTab(ScrollablePage(page), "General")
+        self._add_sidebar_page(ScrollablePage(page), "General", "⚙️")                                                                # Add General settings page to sidebar navigation
 
     def _build_logs_tab(self):
         page = QWidget()
@@ -516,7 +642,7 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(self.log_text)
 
-        self.tabs.addTab(page, "System Logs")
+        self._add_sidebar_page(page, "System Logs", "🧾")                                                                            # Add live log viewer page to sidebar navigation
 
     # =================
     # UI INTERACTIONS
@@ -783,22 +909,59 @@ class SettingsWindow(QMainWindow):
                 font-size: 18px;
                 font-weight: 700;
             }
-            QTabWidget::pane {
+            QFrame#SidebarFrame {
+                background-color: #20242c;
+                border: 1px solid #323844;
+                border-radius: 14px;
+            }
+            QFrame#SidebarIndicator {
+                background-color: #00bc8c;
+                border-radius: 2px;                                                                                                   /* Thin rounded vertical pill for active page */
+            }
+            QStackedWidget#ContentStack {
+                background-color: #2b2d31;
                 border: 1px solid #3b3d42;
-                border-radius: 12px;
-                background: #2b2d31;
+                border-radius: 16px;
             }
-            QTabBar::tab {
-                background: #2b2d31;
+            QToolButton#SidebarCollapseButton {
+                background-color: #1b1d21;
                 color: #d7dce2;
-                padding: 10px 16px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                margin-right: 2px;
+                border: 1px solid #3b3d42;
+                border-radius: 8px;
+                font-size: 12px;
+                font-weight: 700;
+                padding: 0px;
             }
-            QTabBar::tab:selected {
-                background: #3b82f6;
+            QToolButton#SidebarCollapseButton:hover {
+                background-color: #31343a;
+                border: 1px solid #5dade2;
+            }
+            QToolButton#SidebarButton {
+                background-color: #1b1d21;
                 color: white;
+                border: 1px solid #353840;
+                border-radius: 22px;                                                                                                  /* Half of 44px to make perfect circle */
+                font-size: 18px;
+                font-weight: 600;
+                padding: 0px;
+            }
+            QToolButton#SidebarButton:hover {
+                background-color: #2f6feb;
+                border: 1px solid #7fb3ff;
+            }
+            QToolButton#SidebarButton:checked {
+                background-color: #00bc8c;
+                border: 1px solid #5ff0bf;
+            }
+            QToolButton#SidebarButton:checked:hover {
+                background-color: #11c995;
+                border: 1px solid #7ff7d0;
+            }
+            QToolTip {
+                background-color: #111317;
+                color: white;
+                border: 1px solid #3b3d42;
+                padding: 6px 10px;
             }
             QPushButton {
                 color: white;
