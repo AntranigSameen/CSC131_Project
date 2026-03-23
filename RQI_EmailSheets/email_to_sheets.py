@@ -842,16 +842,22 @@ def main():
 # Runs Script Forever
 # ====================
 
-def run_forever(interval=INTERVAL):
+def run_forever(interval=INTERVAL, pause_all_event=None, pause_email_event=None):
     setup_logging()
 
     while True:
+        if pause_all_event is not None:
+            pause_all_event.wait()                                                                                                  # Block when user pauses all automation
+
+        if pause_email_event is not None:
+            pause_email_event.wait()                                                                                                # Block when user pauses only email_to_sheets
+
         try:
             main()
         except Exception:
             logging.exception("Email to sheets error")
 
-        time.sleep(int(interval))
+        time.sleep(int(interval))                                                                                                   # Wait before next check cycle
 
 
 # ====================================================================

@@ -54,9 +54,13 @@ logging.basicConfig(
 # Set up Global Variable, Pause Event, Queue
 # ===========================================
 
-automation_paused = False                                                                                                            # Tracks whether automation is currently paused
-pause_event = threading.Event()                                                                                                      # Thread event used to pause/resume the automation loop
-pause_event.set()                                                                                                                    # Start unpaused
+pause_all_event = threading.Event()                                                                                                  # Master switch for all background services
+pause_automation_loop_event = threading.Event()                                                                                      # Controls only the main automation loop
+pause_email_to_sheets_event = threading.Event()                                                                                      # Controls only the email_to_sheets worker
+
+pause_all_event.set()                                                                                                                # App starts in running state
+pause_automation_loop_event.set()                                                                                                    # Main automation loop starts enabled
+pause_email_to_sheets_event.set()                                                                                                    # Email-to-sheets worker starts enabled
 
 automation_queue = Queue(maxsize=5)                                                                                                  # Queue to process automation tasks
 
@@ -96,26 +100,121 @@ def bootstrap_after_gui(window):
     start_background_services()                                                                                                      # Start automation only after AHA setup is ready
     background_services_started = True                                                                                               # Mark startup as complete so it does not run twice
 
-def is_automation_paused():
-    return automation_paused                                                                                                         # Return current pause state for GUI/tray button text
+# ======================
+# PAUSE STATE HELPERS
+# ======================
 
-def set_pause_state(paused: bool, icon=None):
-    global automation_paused
-    automation_paused = paused                                                                                                       # Update shared pause flag
+def is_automation_loop_paused():
+    return not pause_automation_loop_event.is_set()                                                                                  # True only when the main automation loop is paused
 
-    if paused:
-        pause_event.clear()                                                                                                          # Block automation loop until resumed
-        set_status("PAUSED")                                                                                                         # Write paused status for GUI
-        logging.info("Automation Paused")
+
+def is_email_to_sheets_paused():
+    return not pause_email_to_sheets_event.is_set()                                                                                  # True only when email_to_sheets worker is paused
+
+
+def is_all_paused():
+    return not pause_all_event.is_set()                                                                                              # True only when the master "pause all" switch is active
+
+
+def get_pause_states():
+    return {
+        "all": is_all_paused(),                                                                                                      # Master pause state
+        "automation_loop": is_automation_loop_paused(),                                                                              # Main automation loop pause state
+        "email_to_sheets": is_email_to_sheets_paused(),                                                                              # Email-to-sheets pause state
+    }
+
+# ======================
+# PAUSE / RESUME ACTIONS
+# ======================
+
+def refresh_combined_pause_state():
+    automation_paused = is_automation_loop_paused()                                                                                  # True when AHA automation loop is paused
+    email_paused = is_email_to_sheets_paused()                                                                                       # True when RQI email parsing is paused
+
+    if automation_paused and email_paused:
+        pause_all_event.clear()                                                                                                      # Treat both individual pauses together as "all automation paused"
+        set_status("PAUSED_ALL")                                                                                                     # Show combined paused state in GUI
+        logging.warning("All automation paused")
+
+    elif automation_paused:
+        pause_all_event.set()                                                                                                        # Global pause is not active when only one service is paused
+        set_status("PAUSED_AUTOMATION_LOOP")                                                                                         # Show AHA-only paused state in GUI
+        logging.warning("AHA automation paused")
+
+    elif email_paused:
+        pause_all_event.set()                                                                                                        # Global pause is not active when only one service is paused
+        set_status("PAUSED_EMAIL_TO_SHEETS")                                                                                         # Show RQI-only paused state in GUI
+        logging.warning("RQI email parsing paused")
 
     else:
-        pause_event.set()                                                                                                            # Allow automation loop to continue
-        set_status("RUNNING")                                                                                                        # Write running status for GUI
-        logging.info("Automation Resumed")
+        pause_all_event.set()                                                                                                        # No pause states remain, so all services may run
+        set_status("RUNNING")                                                                                                        # Return GUI to running state
+        logging.warning("All automation Running")
 
-def toggle_pause(icon=None):
-    set_pause_state(not automation_paused, icon=icon)                                                                                # Flip between paused and running states
+def pause_all_automation():
+    pause_all_event.clear()                                                                                                          # Stop all controlled background services
+    pause_automation_loop_event.clear()                                                                                              # Pause AHA automation
+    pause_email_to_sheets_event.clear()                                                                                              # Pause RQI email parsing
+    set_status("PAUSED_ALL")                                                                                                         # Write status for GUI
+    logging.warning("All automation paused")
 
+
+def resume_all_automation():
+    pause_all_event.set()                                                                                                            # Re-enable all controlled background services
+    pause_automation_loop_event.set()                                                                                                # Resume AHA automation
+    pause_email_to_sheets_event.set()                                                                                                # Resume RQI email parsing
+    set_status("RUNNING")                                                                                                            # Write status for GUI
+    logging.warning("All automation resumed")
+
+
+def toggle_pause_all():
+    if is_all_paused():
+        resume_all_automation()                                                                                                      # Resume everything if currently fully paused
+    else:
+        pause_all_automation()                                                                                                       # Pause everything if currently running
+
+
+def pause_automation_loop():
+    pause_automation_loop_event.clear()                                                                                              # Pause only the main automation loop
+    refresh_combined_pause_state()                                                                                                   # Recalculate whether state is AHA paused or fully paused
+    set_status("PAUSED_AUTOMATION_LOOP")
+    logging.warning("AHA automation paused")
+
+
+def resume_automation_loop():
+    pause_automation_loop_event.set()                                                                                                # Resume only the main automation loop
+    refresh_combined_pause_state()                                                                                                   # Recalculate whether state is running, RQI paused, or still fully paused
+    logging.warning("AHA automation resumed")
+
+
+def toggle_pause_automation_loop():
+    if is_automation_loop_paused():
+        resume_automation_loop()                                                                                                     # Resume only the main automation loop
+    else:
+        pause_automation_loop()                                                                                                      # Pause only the main automation loop
+
+
+def pause_email_to_sheets():
+    pause_email_to_sheets_event.clear()                                                                                              # Pause only the email_to_sheets worker
+    refresh_combined_pause_state()                                                                                                   # Recalculate whether state is RQI paused or fully paused
+    logging.warning("RQI email parsing paused")
+
+
+def resume_email_to_sheets():
+    pause_email_to_sheets_event.set()                                                                                                # Resume only the email_to_sheets worker
+    refresh_combined_pause_state()                                                                                                   # Recalculate whether state is running, AHA paused, or still fully paused
+    logging.warning("RQI email parsing resumed")
+
+
+def toggle_pause_email_to_sheets():
+    if is_email_to_sheets_paused():
+        resume_email_to_sheets()                                                                                                     # Resume only email-to-sheets
+    else:
+        pause_email_to_sheets()                                                                                                      # Pause only email-to-sheets
+
+# ===========================
+# END PAUSE / RESUME ACTIONS
+# ===========================
 
 def quit_application(icon=None):
     logging.info("Exiting Application")
@@ -140,7 +239,10 @@ def set_status(status):
 #========================
 
 def start_email_to_sheets():
-    thread = threading.Thread(target=email_to_sheets_worker, daemon=True)                                                            # Run email-to-sheets in background daemon thread
+    thread = threading.Thread(target=email_to_sheets_worker,
+                              kwargs={"pause_all_event": pause_all_event,
+                                      "pause_email_event": pause_email_to_sheets_event,},
+                                      daemon=True,)                                                                                  # Run email-to-sheets in background daemon thread with pause controls
     thread.start()                                                                                                                   # Start continuous email-to-sheets worker
 
 #===================
@@ -183,7 +285,8 @@ def automation_loop():
 
     # Main cycle: check emails and queue automation tasks
     while True:
-        pause_event.wait()                                                                                                           # Pause when automation paused
+        pause_all_event.wait()                                                                                                       # Block here when user pauses all automation
+        pause_automation_loop_event.wait()                                                                                           # Block here when user pauses only the main automation loop
 
         settings = load_settings()                                                                                                   # Reload ENV file for settings changes
         interval = settings["INTERVAL"]                                                                                              # Pull latest interval from settings
@@ -218,8 +321,12 @@ def automation_loop():
 
 def open_settings_window():
     logging.info("Opening settings window")
-    open_settings(on_pause_resume=toggle_pause, on_quit=quit_application,                                                            # Open GUI first, then run first-run AHA bootstrap
-                  get_pause_state=is_automation_paused, on_ready=bootstrap_after_gui,)
+    open_settings(on_toggle_pause_all=toggle_pause_all,                                                                              # Main GUI/tray action for pausing all automation
+        on_toggle_pause_email=toggle_pause_email_to_sheets,                                                                          # GUI action for pausing email_to_sheets only
+        on_toggle_pause_automation_loop=toggle_pause_automation_loop,                                                                # GUI action for pausing main automation loop only
+        on_quit=quit_application,
+        get_pause_states=get_pause_states,
+        on_ready=bootstrap_after_gui,)
 
 # ==================
 # BACKGROUND STARTUP
