@@ -9,11 +9,11 @@ import logging
 from pathlib import Path
 
 from dotenv import set_key, load_dotenv
-from PySide6.QtCore import Qt, QTimer, QSize, QRect
+from PySide6.QtCore import Qt, QTimer, QSize, QRect, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
-                               QToolButton, QButtonGroup, QGraphicsDropShadowEffect,)
+                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 
@@ -170,8 +170,8 @@ class StatusCard(QFrame):
         self.setObjectName("StatusCard")                                                                                              # Used by stylesheet for card styling
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)                                                                                     # Inner padding for card content
-        layout.setSpacing(4)                                                                                                          # Small spacing between title and value
+        layout.setContentsMargins(10, 8, 10, 8)                                                                                       # Inner padding for card content
+        layout.setSpacing(2)                                                                                                          # Small spacing between title and value
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("StatusCardTitle")                                                                             # Used by stylesheet for title style
@@ -211,14 +211,14 @@ class ScrollablePage(QWidget):
 # =================
 
 class AppTrayIcon(QSystemTrayIcon):
-    def __init__(self, window, on_pause_resume=None, on_quit=None, get_pause_state=None):
+    def __init__(self, window, on_toggle_pause_all=None, on_quit=None, get_pause_states=None):
         icon_path = resource_path("icon.png")                                                                                         # Path to tray icon image
         super().__init__(QIcon(icon_path), window)
 
         self.window = window                                                                                                          # Reference to main settings window
-        self.on_pause_resume = on_pause_resume                                                                                        # Pause/resume callback from master_control
+        self.on_toggle_pause_all = on_toggle_pause_all                                                                                # Pause/resume callback from master_control
         self.on_quit = on_quit                                                                                                        # Quit callback from master_control
-        self.get_pause_state = get_pause_state                                                                                        # Function used to decide button/menu text
+        self.get_pause_states = get_pause_states                                                                                      # Function used to decide button/menu text
 
         self.menu = QMenu()                                                                                                           # Tray right-click context menu
 
@@ -245,9 +245,16 @@ class AppTrayIcon(QSystemTrayIcon):
         self.activated.connect(self.on_activated)                                                                                     # Left-click behavior for tray icon
 
     def pause_menu_text(self):
-        if self.get_pause_state and self.get_pause_state():
-            return "Resume Automation"                                                                                                # Show resume when currently paused
-        return "Pause Automation"                                                                                                     # Show pause when currently running
+        pause_states = self.get_pause_states() if self.get_pause_states else {
+            "all": False,
+            "automation_loop": False,
+            "email_to_sheets": False,
+        }
+
+        if pause_states["all"]:
+            return "Resume All Automation"                                                                                            # Show resume when all automation is paused
+
+        return "Pause All Automation"                                                                                                 # Show pause when all automation is running
 
     def refresh_pause_text(self):
         self.pause_action.setText(self.pause_menu_text())                                                                             # Refresh tray menu text after state change
@@ -265,8 +272,8 @@ class AppTrayIcon(QSystemTrayIcon):
             logging.error("Log file not found: %s", log_path)
 
     def pause_resume_clicked(self):
-        if self.on_pause_resume:
-            self.on_pause_resume()                                                                                                    # Trigger pause/resume callback
+        if self.on_toggle_pause_all:
+            self.on_toggle_pause_all()                                                                                                # Trigger pause/resume callback
         self.refresh_pause_text()                                                                                                     # Update tray menu label immediately
 
     def quit_clicked(self):
@@ -284,14 +291,20 @@ class AppTrayIcon(QSystemTrayIcon):
 # ==================
 
 class SettingsWindow(QMainWindow):
-    def __init__(self, on_pause_resume=None, on_quit=None, get_pause_state=None, on_ready=None):
+    def __init__(self, on_toggle_pause_all=None, on_toggle_pause_email=None,
+                 on_toggle_pause_automation_loop=None, on_quit=None,
+                 get_pause_states=None, on_ready=None,):
         super().__init__()
 
         self.setWindowIcon(QIcon(resource_path("icon.png")))                                                                          # Set window icon in title bar/taskbar
-        self.on_pause_resume = on_pause_resume                                                                                        # Callback for pause button
+        self.on_toggle_pause_all = on_toggle_pause_all                                                                                # Callback for pausing/resuming all automation
+        self.on_toggle_pause_email = on_toggle_pause_email                                                                            # Callback for pausing/resuming email_to_sheets
+        self.on_toggle_pause_automation_loop = on_toggle_pause_automation_loop                                                        # Callback for pausing/resuming the main automation loop
+        self.get_pause_states = get_pause_states                                                                                      # Callback returning all current pause states
         self.on_quit = on_quit                                                                                                        # Callback for quit button
-        self.get_pause_state = get_pause_state                                                                                        # Callback for current pause state
         self.entries = {}                                                                                                             # Stores all editable env QLineEdit widgets
+
+        self.selected_pause_target = "all"                                                                                            # Tracks which pause action the main split button should execute
 
         self.setWindowTitle("Automation Machine")
         self.resize(1360, 820)                                                                                                        # Default window size
@@ -303,6 +316,36 @@ class SettingsWindow(QMainWindow):
         self._build_ui()                                                                                                              # Create all GUI widgets and layouts
         self._start_timers()                                                                                                          # Start automatic status/login/log refresh timers
     
+    # ==================
+    # BUTTON ANIMATIONS
+    # ==================
+
+    def _animate_button_press(self, button):
+        start_rect = button.geometry()                                                                                                # Current button position and size
+
+        pressed_rect = start_rect.adjusted(0, 2, 0, 2)                                                                                # Slightly shift button downward to simulate press
+
+        anim = QPropertyAnimation(button, b"geometry")                                                                                # Animate the button geometry (position/size)
+        anim.setDuration(60)                                                                                                          # Very fast animation for responsive feel
+        anim.setStartValue(start_rect)                                                                                                # Start from normal position
+        anim.setEndValue(pressed_rect)                                                                                                # End at "pressed down" position
+        anim.setEasingCurve(QEasingCurve.OutQuad)                                                                                     # Smooth easing for natural motion
+
+        def bounce_back():
+            anim_back = QPropertyAnimation(button, b"geometry")                                                                       # Reverse animation to return to original position
+            anim_back.setDuration(80)                                                                                                 # Match forward animation speed
+            anim_back.setStartValue(pressed_rect)                                                                                     # Start from pressed position
+            anim_back.setEndValue(start_rect)                                                                                         # Return to original position
+            anim_back.setEasingCurve(QEasingCurve.OutQuad)                                                                            # Smooth easing on release
+            anim_back.start()
+
+            button._anim_back = anim_back                                                                                             # Store reference to prevent garbage collection
+
+        anim.finished.connect(bounce_back)                                                                                            # When press animation finishes, bounce back
+        anim.start()
+
+        button._anim = anim                                                                                                           # Store reference to prevent garbage collection
+
     # ==================
     # TRAY NOTIFICATION
     # ==================
@@ -412,59 +455,180 @@ class SettingsWindow(QMainWindow):
         root.setContentsMargins(18, 18, 18, 18)                                                                                       # Outer padding around whole interface
         root.setSpacing(10)                                                                                                           # Vertical spacing between major sections
 
-        header = QVBoxLayout()
-        title = QLabel("Automation Machine")
-        title.setObjectName("MainTitle")                                                                                              # Used by stylesheet for title formatting
-        header.addWidget(title)
-        root.addLayout(header)
-
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(10)                                                                                                      # Space between top status cards
+        # ==============
+        # Card Creation
+        # ==============
 
         self.automation_card = StatusCard("Automation", "Checking status...")                                                         # Shows running/paused state
         self.browser_card = StatusCard("Browser", "")                                                                                 # Shows headless vs visible browser
         self.interval_card = StatusCard("Interval", "")                                                                               # Shows current cycle interval
         self.queue_card = StatusCard("Queue", "")                                                                                     # Shows automation queue size
 
-        cards_row.addWidget(self.automation_card)
-        cards_row.addWidget(self.browser_card)
-        cards_row.addWidget(self.interval_card)
-        cards_row.addWidget(self.queue_card)
+        for card in [self.automation_card, self.browser_card, self.interval_card, self.queue_card]:
+            card.setMinimumWidth(160)                                                                                                 # Keep dashboard cards compact
+            card.setMaximumWidth(200)                                                                                                 # Prevent cards from stretching too wide
+            card.setFixedHeight(78)                                                                                                   # Force all four cards to the same height so the 2x2 grid is predictable
 
-        root.addLayout(cards_row)
+        # ======================
+        # Top Left Status Cards
+        # ======================
 
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)                                                                                                         # Space between control buttons
+        cards_grid = QGridLayout()
+        cards_grid.setContentsMargins(0, 0, 0, 0)                                                                                     # Keep top-left card block tight
+        cards_grid.setHorizontalSpacing(10)                                                                                           # Space between left/right cards
+        cards_grid.setVerticalSpacing(10)                                                                                             # Space between top/bottom cards
+
+        cards_grid.addWidget(self.automation_card, 0, 0)                                                                              # Top-left status card
+        cards_grid.addWidget(self.browser_card, 0, 1)                                                                                 # Top-right status card
+        cards_grid.addWidget(self.interval_card, 1, 0)                                                                                # Bottom-left status card
+        cards_grid.addWidget(self.queue_card, 1, 1)                                                                                   # Bottom-right status card
+
+        left_top_panel = QWidget()
+        left_top_layout = QVBoxLayout(left_top_panel)
+        left_top_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)                                                            # Keep card grid tightly sized
+        left_top_panel.setFixedHeight(166)                                                                                            # Match the visual height of the mini log panel
+        left_top_layout.setContentsMargins(0, 0, 0, 0)
+        left_top_layout.setSpacing(10)
+        left_top_layout.addLayout(cards_grid)                                                                                         # Compact 2x2 grid of mini cards
+
+        # ===============================
+        # Top Right Mini Live Log Viewer
+        # ===============================
+
+        mini_logs_panel = QFrame()
+        mini_logs_panel.setObjectName("MiniLogsPanel")                                                                                # Styled compact log viewer panel for top-right area
+        mini_logs_panel.setFixedHeight(166)                                                                                           # Set Live Logs panel to match height of cards grid
+
+        mini_logs_layout = QVBoxLayout(mini_logs_panel)
+        mini_logs_layout.setContentsMargins(10, 8, 10, 8)                                                                             # Compact inner padding so log box fits cleanly inside the fixed-height panel
+        mini_logs_layout.setSpacing(4)
+
+        mini_logs_title = QLabel("Live Logs")
+        mini_logs_title.setObjectName("MiniLogsTitle")                                                                                # Small heading above top-right log preview
+
+        self.mini_log_text = QPlainTextEdit()
+        self.mini_log_text.setObjectName("MiniLogText")                                                                               # Separate styling hook for compact top log viewer
+        self.mini_log_text.setReadOnly(True)                                                                                          # Prevent editing the compact log preview
+        self.mini_log_text.setLineWrapMode(QPlainTextEdit.NoWrap)                                                                     # Preserve original log line formatting
+        self.mini_log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)                                                # Fill available space inside panel
+        self.mini_log_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)                                                        # Hide horizontal scrollbar in compact preview
+        self.mini_log_text.setPlaceholderText("Recent log lines will appear here...")
+
+        mini_logs_layout.addWidget(mini_logs_title)
+        mini_logs_layout.addWidget(self.mini_log_text)
+
+        # =========================
+        # Top dashboard row
+        # =========================
+
+        top_dashboard_row = QHBoxLayout()
+        top_dashboard_row.setContentsMargins(0, 0, 0, 0)
+        top_dashboard_row.setSpacing(14)
+
+        top_dashboard_row.addWidget(left_top_panel, 0)                                                                                # Top-left compact status card block
+        top_dashboard_row.addWidget(mini_logs_panel, 1)                                                                               # Top-right mini live log viewer takes remaining width
+        mini_logs_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)                                                       # Prevent vertical stretching of log panel
 
         self.save_btn = QPushButton("Save Settings")
-        self.save_btn.setObjectName("SaveButton")                                                                                     # Used by stylesheet for save button color
-
-        self.pause_btn = QPushButton("Pause Automation")
-        self.pause_btn.setObjectName("PauseButton")                                                                                   # Used by stylesheet for pause button color
+        self.save_btn.setObjectName("SaveButton")                                                                                     # Used by stylesheet for save button
 
         self.restart_btn = QPushButton("Restart App")
-        self.restart_btn.setObjectName("RestartButton")                                                                               # Used by stylesheet for restart button color
-
-        self.signout_btn = QPushButton("Sign Out of AHA")
-        self.signout_btn.setObjectName("SignOutButton")                                                                               # Used by stylesheet for sign-out button color
+        self.restart_btn.setObjectName("RestartButton")                                                                               # Used by stylesheet for restart button
+        self.restart_btn.setFixedHeight(26)
 
         self.quit_btn = QPushButton("Quit")
-        self.quit_btn.setObjectName("QuitButton")                                                                                     # Used by stylesheet for quit button color
+        self.quit_btn.setObjectName("QuitButton")                                                                                     # Used by stylesheet for quit button
+        self.quit_btn.setFixedHeight(26)
 
+        self.signout_btn = QPushButton("Sign Out of AHA")
+        self.signout_btn.setObjectName("SignOutButton")                                                                               # Used by stylesheet for sign-out button
+        self.signout_btn.setFixedHeight(28)                                                                                           # Set the AHA sign-out button height
+        self.signout_btn.setMinimumWidth(110)                                                                                         # Keep button compact without shrinking text too aggressively
+        self.signout_btn.setMaximumWidth(130)                                                                                         # Prevent button from stretching too wide
+
+        self.aha_required_label = QLabel("AHA login required")
+        self.aha_required_label.setObjectName("AHARequiredLabel")                                                                     # Red warning label shown when no AHA login exists
+        self.aha_required_label.hide()                                                                                                # Hidden by default until login check says it is needed
+
+        # =========================
+        # Top-right AHA Status Row
+        # =========================
+
+        aha_row = QHBoxLayout()
+        aha_row.setContentsMargins(0, 0, 0, 0)
+        aha_row.setSpacing(6)
+
+        aha_row.addStretch(1)                                                                                                         # Push AHA controls toward the right side
+        aha_row.addWidget(self.signout_btn, 0, Qt.AlignVCenter)                                                                       # Standalone AHA sign-out button, centered vertically
+        aha_row.addWidget(self.aha_required_label, 0, Qt.AlignVCenter)                                                                # Red warning text appears when AHA login is missing, aligned with button
+
+
+        self.pause_btn = QPushButton("Pause All")
+        self.pause_btn.setObjectName("PauseButton")                                                                                   # Main quick-action button for pausing/resuming all automation
+        self.pause_btn.setFixedHeight(24)
+        self.pause_btn.setMinimumWidth(112)
+
+        self.pause_menu_btn = QToolButton()
+        self.pause_menu_btn.setFixedWidth(24)                                                                                         # Narrow arrow button
+        self.pause_menu_btn.setFixedHeight(24)
+        self.pause_menu_btn.setStyleSheet("padding: 0px; margin: 0px;")
+        self.pause_menu_btn.setObjectName("PauseMenuButton")                                                                          # Small dropdown arrow button next to Pause All
+        self.pause_menu_btn.setText("☰")
+        self.pause_menu_btn.setPopupMode(QToolButton.InstantPopup)                                                                    # Open menu immediately on click
+
+        self.pause_menu = QMenu(self)
+
+        self.pause_all_action = QAction("Pause All Automation", self)
+        self.pause_all_action.triggered.connect(lambda: self._select_pause_target("all"))                                             # Select Pause All for the main split button
+
+        self.pause_email_action = QAction("Pause RQI Email Parsing", self)
+        self.pause_email_action.triggered.connect(lambda: self._select_pause_target("email"))                                         # Select RQI Email Parsing for the main split button
+
+        self.pause_loop_action = QAction("Pause AHA Automation", self)
+        self.pause_loop_action.triggered.connect(lambda: self._select_pause_target("automation_loop"))                                # Select AHA Automation for the main split button
+
+        self.pause_menu.addAction(self.pause_all_action)
+        self.pause_menu.addAction(self.pause_email_action)
+        self.pause_menu.addAction(self.pause_loop_action)
+
+        self.pause_menu_btn.setMenu(self.pause_menu)
+
+
+        self.save_btn.clicked.connect(lambda: self._animate_button_press(self.save_btn))                                              # Animate press before save
         self.save_btn.clicked.connect(lambda: save_settings(self.entries, restart=False))                                             # Save .env changes without restarting
-        self.pause_btn.clicked.connect(self._pause_resume_clicked)                                                                    # Pause/resume automation
+        self.pause_btn.clicked.connect(lambda: self._animate_button_press(self.pause_btn))                                            # Animate press before pause
+        self.pause_btn.clicked.connect(self._run_selected_pause_action)                                                               # Main button acts as quick toggle for Pause All
+        self.restart_btn.clicked.connect(lambda: self._animate_button_press(self.restart_btn))                                        # Animate press before restart
         self.restart_btn.clicked.connect(restart_application)                                                                         # Restart whole app
+        self.signout_btn.clicked.connect(lambda: self._animate_button_press(self.signout_btn))                                        # Animate press before sign out
         self.signout_btn.clicked.connect(sign_out)                                                                                    # Clear saved AHA login state
+        self.quit_btn.clicked.connect(lambda: self._animate_button_press(self.quit_btn))                                              # Animate press before quit
         self.quit_btn.clicked.connect(self._quit_clicked)                                                                             # Confirm and quit app
 
-        toolbar.addWidget(self.save_btn)
-        toolbar.addStretch(1)                                                                                                         # Push remaining buttons to the right
-        toolbar.addWidget(self.pause_btn)
-        toolbar.addWidget(self.restart_btn)
-        toolbar.addWidget(self.signout_btn)
-        toolbar.addWidget(self.quit_btn)
+        # =========================
+        # Main action buttons row
+        # =========================
 
-        root.addLayout(toolbar)
+        controls_row = QHBoxLayout()
+        controls_row.setContentsMargins(0, 0, 0, 0)
+        controls_row.setSpacing(4)
+        controls_row.addStretch(1)                                                                                                    # Keep restart/quit aligned away from Save
+        controls_row.addWidget(self.restart_btn)                                                                                      # Restart the whole application
+        controls_row.addWidget(self.quit_btn)                                                                                         # Quit the application
+
+        pause_control = QWidget()
+        pause_control_layout = QHBoxLayout(pause_control)
+        pause_control_layout.setContentsMargins(0, 0, 0, 0)
+        pause_control_layout.setSpacing(0)                                                                                            # Keep button and dropdown arrow tightly joined
+
+        pause_control_layout.addWidget(self.pause_btn)
+        pause_control_layout.addWidget(self.pause_menu_btn)
+
+        mini_logs_layout.addWidget(pause_control, 0, Qt.AlignRight)                                                                   # Pause All control under the mini logs on the right side
+
+        root.addLayout(aha_row)                                                                                                       # Separate AHA sign-out + warning near top
+        root.addLayout(top_dashboard_row)                                                                                             # Top-left cards + top-right mini logs
+        root.addLayout(controls_row)                                                                                                  # Save / Restart / Quit row
 
         content_row = QHBoxLayout()
         content_row.setSpacing(6)                                                                                                     # Tight spacing between sidebar and main content
@@ -497,8 +661,23 @@ class SettingsWindow(QMainWindow):
         self.page_stack = QStackedWidget()
         self.page_stack.setObjectName("ContentStack")                                                                                 # Main right-side content area that replaces QTabWidget
 
+        self.right_content_panel = QWidget()
+        self.right_content_layout = QVBoxLayout(self.right_content_panel)
+        self.right_content_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_content_layout.setSpacing(10)                                                                                      # Space between tab content area and centered Save button
+
+        self.right_content_layout.addWidget(self.page_stack, 1)                                                                       # Main tab content takes all remaining vertical space
+
+        save_footer_row = QHBoxLayout()
+        save_footer_row.setContentsMargins(0, 0, 0, 0)
+        save_footer_row.addStretch(1)                                                                                                 # Center the Save button at the bottom of the tab area
+        save_footer_row.addWidget(self.save_btn)                                                                                      # Shared Save Settings button shown inside all tabs
+        save_footer_row.addStretch(1)
+
+        self.right_content_layout.addLayout(save_footer_row)                                                                          # Add centered Save button under the page stack
+
         content_row.addWidget(self.sidebar_frame)
-        content_row.addWidget(self.page_stack, 1)                                                                                     # Right-side page area takes remaining width
+        content_row.addWidget(self.right_content_panel, 1)                                                                            # Right-side panel now contains both page stack and bottom Save button
 
         root.addLayout(content_row, 1)
 
@@ -648,15 +827,34 @@ class SettingsWindow(QMainWindow):
     # UI INTERACTIONS
     # =================
 
-    def _pause_resume_clicked(self):
-        global _qt_tray
+    def _select_pause_target(self, target):
+        self.selected_pause_target = target                                                                                           # Remember which pause action the dropdown selected
+        self._update_pause_controls()                                                                                                 # Refresh main button text to match selected pause target
 
-        if self.on_pause_resume:
-            self.on_pause_resume()                                                                                                    # Call shared pause/resume handler
-        self._update_pause_button()                                                                                                   # Refresh button text after state change
+    def _run_selected_pause_action(self):
+        if self.selected_pause_target == "all":
+            self._toggle_pause_all_clicked()                                                                                          # Run Pause/Resume All through existing callback
 
-        if _qt_tray is not None:
-            _qt_tray.refresh_pause_text()                                                                                             # Keep tray text synced with button text
+        elif self.selected_pause_target == "email":
+            self._toggle_pause_email_clicked()                                                                                        # Run Pause/Resume RQI Email Parsing through existing callback
+
+        elif self.selected_pause_target == "automation_loop":
+            self._toggle_pause_automation_loop_clicked()                                                                              # Run Pause/Resume AHA Automation through existing callback
+
+    def _toggle_pause_all_clicked(self):
+        if self.on_toggle_pause_all:
+            self.on_toggle_pause_all()                                                                                                # Pause or resume all automation through shared callback
+        self._update_pause_controls()                                                                                                 # Refresh visible button/menu text after state change
+
+    def _toggle_pause_email_clicked(self):
+        if self.on_toggle_pause_email:
+            self.on_toggle_pause_email()                                                                                              # Pause or resume only email_to_sheets
+        self._update_pause_controls()                                                                                                 # Refresh visible button/menu text after state change
+
+    def _toggle_pause_automation_loop_clicked(self):
+        if self.on_toggle_pause_automation_loop:
+            self.on_toggle_pause_automation_loop()                                                                                    # Pause or resume only the main automation loop
+        self._update_pause_controls()                                                                                                 # Refresh visible button/menu text after state change
 
     def _quit_clicked(self):
         result = QMessageBox.question(
@@ -694,20 +892,55 @@ class SettingsWindow(QMainWindow):
         self._update_status()                                                                                                         # Initial status refresh on startup
         self._update_login_status()                                                                                                   # Initial login refresh on startup
         self._update_logs()                                                                                                           # Initial log refresh on startup
+        self._update_pause_controls()                                                                                                 # Initial pause button/menu refresh on startup
 
-    def _update_pause_button(self):
-        global _qt_tray
+    def _update_pause_controls(self):
+        pause_states = self.get_pause_states() if self.get_pause_states else {
+            "all": False,
+            "automation_loop": False,
+            "email_to_sheets": False,
+        }
 
-        if self.get_pause_state and self.get_pause_state():
-            self.pause_btn.setText("Resume Automation")                                                                               # Button text when currently paused
+        if pause_states["all"]:
+            self.pause_all_action.setText("Resume All Automation")                                                                    # Menu text when everything is paused
         else:
-            self.pause_btn.setText("Pause Automation")                                                                                # Button text when currently running
-        
+            self.pause_all_action.setText("Pause All Automation")                                                                     # Menu text when everything is running
+
+        if pause_states["email_to_sheets"]:
+            self.pause_email_action.setText("Resume RQI Email Parsing")                                                               # Menu text when RQI email parsing is paused
+        else:
+            self.pause_email_action.setText("Pause RQI Email Parsing")                                                                # Menu text when RQI email parsing is running
+
+        if pause_states["automation_loop"]:
+            self.pause_loop_action.setText("Resume AHA Automation")                                                                   # Menu text when AHA automation is paused
+        else:
+            self.pause_loop_action.setText("Pause AHA Automation")                                                                    # Menu text when AHA automation is running
+
+        if self.selected_pause_target == "all":
+            if pause_states["all"]:
+                self.pause_btn.setText("Resume All")                                                                                  # Main button follows selected target and current state
+            else:
+                self.pause_btn.setText("Pause All")
+
+        elif self.selected_pause_target == "email":
+            if pause_states["email_to_sheets"]:
+                self.pause_btn.setText("Resume RQI")
+            else:
+                self.pause_btn.setText("Pause RQI")
+
+        elif self.selected_pause_target == "automation_loop":
+            if pause_states["automation_loop"]:
+                self.pause_btn.setText("Resume AHA")
+            else:
+                self.pause_btn.setText("Pause AHA")
+
+        global _qt_tray
         if _qt_tray is not None:
-            _qt_tray.refresh_pause_text()                                                                                             # Keep tray menu text synced
+            _qt_tray.refresh_pause_text()                                                                                             # Keep tray text synced with current pause state
 
     def _update_status(self):
         status_file = os.path.join(base_dir(), "automation_status.txt")                                                               # Status file written by master_control
+        self._update_pause_controls()                                                                                                 # Keep pause controls synced with real runtime state
 
         if os.path.exists(status_file):
             try:
@@ -723,11 +956,24 @@ class SettingsWindow(QMainWindow):
             self.automation_card.set_color("#00bc8c")
             self.quick_status.setText("Running")
             self.quick_status.setStyleSheet("color: #00bc8c; font-weight: 700;")
-        elif raw_status == "PAUSED":
-            self.automation_card.set_value("Paused")
-            self.automation_card.set_color("#f39c12")
-            self.quick_status.setText("Paused")
-            self.quick_status.setStyleSheet("color: #f39c12; font-weight: 700;")
+
+        elif raw_status == "PAUSED_ALL":
+            self.automation_card.set_value("All Automation Paused")
+            self.automation_card.set_color("#e64e30")
+            self.quick_status.setText("All Automation Paused")
+            self.quick_status.setStyleSheet("color: #e64e30; font-weight: 700;")
+
+        elif raw_status == "PAUSED_AUTOMATION_LOOP":
+            self.automation_card.set_value("AHA Automation Paused")
+            self.automation_card.set_color("#e64e30")
+            self.quick_status.setText("AHA Automation Paused")
+            self.quick_status.setStyleSheet("color: #e64e30; font-weight: 700;")
+
+        elif raw_status == "PAUSED_EMAIL_TO_SHEETS":
+            self.automation_card.set_value("RQI Email Parsing Paused")
+            self.automation_card.set_color("#e64e30")
+            self.quick_status.setText("RQI Email Parsing Paused")
+            self.quick_status.setStyleSheet("color: #e64e30; font-weight: 700;")
         else:
             self.automation_card.set_value("Unknown")
             self.automation_card.set_color("#e64e30")
@@ -737,18 +983,18 @@ class SettingsWindow(QMainWindow):
         current_headless = os.getenv("IS_HEADLESS", "")                                                                               # Read current browser visibility setting
         if str(current_headless).strip().lower() in ("1", "true", "yes"):
             self.browser_card.set_value("Headless")
-            self.browser_card.set_color("#5dade2")
+            self.browser_card.set_color("#00bc8c")
             self.quick_mode.setText("Headless")
-            self.quick_mode.setStyleSheet("color: #5dade2;")
+            self.quick_mode.setStyleSheet("color: #00bc8c;")
         else:
             self.browser_card.set_value("Visible Browser")
-            self.browser_card.set_color("#00bc8c")
+            self.browser_card.set_color("#f39c12")
             self.quick_mode.setText("Visible Browser")
-            self.quick_mode.setStyleSheet("color: #00bc8c;")
+            self.quick_mode.setStyleSheet("color: #f39c12;")
 
         interval_text = os.getenv("INTERVAL", "")                                                                                     # Show current automation interval from env
         self.interval_card.set_value(f"{interval_text} sec")
-        self.interval_card.set_color("#f39c12")
+        self.interval_card.set_color("#00bc8c")
 
         queue_file = os.path.join(base_dir(), "queue_status.txt")                                                                     # Queue status file written by master_control
         if os.path.exists(queue_file):
@@ -779,21 +1025,29 @@ class SettingsWindow(QMainWindow):
             self.queue_card.set_color(queue_color)
             self.quick_queue.setStyleSheet(f"color: {queue_color};")
 
-        self._update_pause_button()                                                                                                   # Keep pause button label synced with real state
+        self._update_pause_controls()                                                                                                 # Keep pause button label synced with real state
 
     def _update_login_status(self):
         aha_auth_file = Path(base_dir()) / "aha_auth.json"                                                                            # Saved AHA auth state file
         if aha_auth_file.exists():
             text = "Signed In"
             color = "#00bc8c"
+            aha_required = False                                                                                                      # No warning needed when AHA login exists
         else:
             text = "Not Signed In"
-            color = "#adb5bd"
+            color = "#e64e30"
+            aha_required = True                                                                                                       # Show warning when no AHA login exists
 
         self.aha_login_label.setText(text)                                                                                            # Update label on AHA tab
         self.aha_login_label.setStyleSheet(f"color: {color}; font-weight: 700;")
+
         self.quick_login.setText(text)                                                                                                # Update quick label on overview tab
         self.quick_login.setStyleSheet(f"color: {color};")
+
+        if aha_required:
+            self.aha_required_label.show()                                                                                            # Show red warning near Sign Out button when login is missing
+        else:
+            self.aha_required_label.hide()                                                                                            # Hide warning when AHA login is present
 
     # ===================
     # LOG VIEWER HELPERS
@@ -825,6 +1079,28 @@ class SettingsWindow(QMainWindow):
 
         cursor.insertText(line, fmt)                                                                                                  # Insert line using selected color format
 
+    def _append_mini_log_line(self, line: str):
+        cursor = self.mini_log_text.textCursor()
+        cursor.movePosition(QTextCursor.End)                                                                                          # Append all new mini logs to end of compact viewer
+
+        fmt = QTextCharFormat()
+
+        upper_line = line.upper()                                                                                                     # Normalize once for easier keyword checks
+
+        if " - ERROR - " in upper_line or "ERROR:" in upper_line:
+            fmt.setForeground(QColor("#e64e30"))                                                                                    # Red for error lines in compact log viewer
+
+        elif " - WARNING - " in upper_line or "WARNING:" in upper_line:
+            fmt.setForeground(QColor("#f39c12"))                                                                                    # Orange for warning lines in compact log viewer
+
+        elif " - INFO - " in upper_line or "INFO:" in upper_line:
+            fmt.setForeground(QColor("#5dade2"))                                                                                    # Blue for info lines in compact log viewer
+
+        else:
+            fmt.setForeground(QColor("#d7dce2"))                                                                                    # Default light text for all other log lines
+
+        cursor.insertText(line, fmt)                                                                                                  # Insert compact log line with color formatting
+
     def _append_log_text(self, text: str):
         if not text:
             return                                                                                                                    # Nothing to append
@@ -833,10 +1109,42 @@ class SettingsWindow(QMainWindow):
         for line in lines:
             self._append_log_line(line)                                                                                               # Append each line with color formatting
 
+    def _append_mini_log_text(self, text: str):
+        if not text:
+            return                                                                                                                    # Nothing to append into compact log viewer
+
+        lines = text.splitlines(keepends=True)                                                                                        # Preserve original line endings
+        for line in lines:
+            self._append_mini_log_line(line)                                                                                          # Append each compact log line with color formatting
+
+    def _update_mini_logs(self):
+        current_log_file = log_file()                                                                                                 # Current live application log path
+
+        if not os.path.exists(current_log_file):
+            self.mini_log_text.clear()                                                                                                # Clear compact viewer when no log file exists
+            return
+
+        try:
+            with open(current_log_file, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()                                                                                                 # Read all lines so we can show only the newest ones
+
+            recent_lines = lines[-8:]                                                                                                 # Show only the last few log lines in compact viewer
+
+            self.mini_log_text.clear()                                                                                                # Rebuild compact log viewer fresh on each refresh
+            self._append_mini_log_text("".join(recent_lines))                                                                         # Insert recent lines with INFO/WARNING/ERROR colors
+
+            scrollbar = self.mini_log_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())                                                                                   # Keep compact viewer pinned to newest lines
+
+        except Exception as e:
+            logging.exception("Error updating mini log viewer: %s", e)
+
     def _update_logs(self):
         current_log_file = log_file()                                                                                                 # Current live application log path
 
         if not os.path.exists(current_log_file):
+            if hasattr(self, "mini_log_text"):
+                self.mini_log_text.clear()                                                                                            # Clear compact log viewer if no log file exists yet
             return                                                                                                                    # Do nothing if log file does not exist yet
 
         try:
@@ -879,6 +1187,8 @@ class SettingsWindow(QMainWindow):
         except Exception as e:
             logging.exception("Error updating log viewer: %s", e)
 
+        self._update_mini_logs()
+
     # =======
     # STYLES
     # =======
@@ -888,25 +1198,20 @@ class SettingsWindow(QMainWindow):
             QMainWindow {
                 background-color: #1e1f22;
             }
-            QLabel#MainTitle {
-                color: white;
-                font-size: 24px;
-                font-weight: 700;
-            }
             QFrame#StatusCard {
                 background-color: #2b2d31;
                 border: 1px solid #3b3d42;
-                border-radius: 16px;
-                padding: 6px;
+                border-radius: 14px;
+                padding: 2px;                                                                                                         /* Smaller visual footprint for compact dashboard cards */
             }
             QLabel#StatusCardTitle {
                 color: #bfc5d2;
-                font-size: 11px;
+                font-size: 10px;                                                                                                      /* Smaller title text for compact cards */
                 font-weight: 600;
             }
             QLabel#StatusCardValue {
                 color: white;
-                font-size: 18px;
+                font-size: 14px;                                                                                                      /* Smaller value text so 2x2 grid fits comfortably */
                 font-weight: 700;
             }
             QFrame#SidebarFrame {
@@ -969,25 +1274,99 @@ class SettingsWindow(QMainWindow):
                 border-radius: 10px;
                 padding: 10px 16px;
                 font-weight: 600;
-                min-height: 18px;
+                min-height: 8px;
+            }
+            QPushButton#RestartButton, QPushButton#QuitButton {
+                padding: 4px 12px;
+                min-height: 0px;
             }
 
-            QPushButton#SaveButton {background-color: #00bc8c;}
-            QPushButton#SaveButton:hover {background-color: #17d7a0;}
+            QPushButton#SaveButton {
+                background-color: #00bc8c;
+                padding: 8px 18px;                                                                                                    /* Slightly wider bottom-centered save button */
+                min-width: 150px;                                                                                                     /* Gives bottom save button a more intentional centered look */
+            }
+            QPushButton#SaveButton:hover {
+                background-color: #17d7a0;
+            }
 
-            QPushButton#PauseButton {background-color: #f39c12;}
-            QPushButton#PauseButton:hover {background-color: #ffb347;}
+            QPushButton#PauseButton {
+                background-color: #f4a51c;                                                                                            /* Main pause button color */
+                color: white;
+                border: none;
+                border-top-left-radius: 10px;                                                                                         /* Round only left side */
+                border-bottom-left-radius: 10px;
+                border-top-right-radius: 0px;                                                                                         /* No rounding where it joins dropdown */
+                border-bottom-right-radius: 0px;
+                padding: 0 10px;
+                font-weight: 600;
+            }
+            QPushButton#PauseButton:hover {background-color: #ffb52e;}
+                           
+            QPushButton#PauseButton:pressed {
+                background-color: #de9210;                                                                                            /* Pressed state */
+            }
+
+            QToolButton#PauseMenuButton {
+                background-color: #f4a51c;
+                color: white;
+                border: none;
+                border-left: 1px solid rgba(255, 255, 255, 0.18);                                                                     /* Small divider between main and dropdown areas */
+                border-top-left-radius: 0px;
+                border-bottom-left-radius: 0px;
+                border-top-right-radius: 10px;
+                border-bottom-right-radius: 10px;
+                padding: 0px;
+                margin: 0px;
+            }
+            QToolButton#PauseMenuButton:hover {
+                background-color: #ffb52e;                                                                                            /* Match hover */
+            }
+            QToolButton#PauseMenuButton:pressed {
+                background-color: #de9210;                                                                                            /* Match pressed */
+            }          
+            QToolButton#PauseMenuButton::menu-indicator {
+                image: none;                                                                                                          /* Hide Qt's default dropdown arrow */
+                width: 0px;                                                                                                           /* Remove reserved arrow space */
+            }
 
             QPushButton#RestartButton {background-color: #e67e22;}
             QPushButton#RestartButton:hover {background-color: #f39c12;}
 
-            QPushButton#SignOutButton {background-color: #3498db;}
+            QPushButton#SignOutButton {
+                background-color: #3498db;
+                padding: 6px 12px;                                                                                                    /* Smaller AHA button so the top-right row takes less height */
+                min-height: 0px;
+                border-radius: 10px;
+                font-size: 11px;                                                                                                      /* Match smaller button height */
+                font-weight: 600;
+            }
             QPushButton#SignOutButton:hover {background-color: #5dade2;}
 
             QPushButton#QuitButton {background-color: #e64e30;}
             QPushButton#QuitButton:hover {background-color: #ff6b57;}
             
             QPushButton:hover {background-color: #3b82f6;}
+    
+            QFrame#MiniLogsPanel {
+                background-color: #2b2d31;
+                border: 1px solid #3b3d42;
+                border-radius: 14px;
+                min-height: 166px;
+                max-height: 166px;
+            }
+
+            QLabel#MiniLogsTitle {
+                color: white;
+                font-size: 12px;
+                font-weight: 700;
+            }
+
+            QLabel#AHARequiredLabel {
+                color: #ff5f56;                                                                                                       /* Red warning text when AHA login is missing */
+                font-size: 11px;
+                font-weight: 700;
+            }
             
             QLineEdit {
                 background-color: #1f2125;
@@ -997,13 +1376,21 @@ class SettingsWindow(QMainWindow):
                 padding: 8px;
             }
             QPlainTextEdit {
-                background-color: #1f2125;
+                background-color: #1b1d21;
                 color: #d7dce2;
                 border: 1px solid #3b3d42;
                 border-radius: 10px;
-                padding: 8px;
-                font-family: Consolas;
-                font-size: 10pt;
+                padding: 6px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 11px;
+            }
+            QPlainTextEdit#MiniLogText {
+                background-color: #151821;                                                                                            /* Slightly darker compact log panel */
+                border: 1px solid #343842;
+                border-radius: 10px;
+                padding: 5px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10px;                                                                                                      /* Smaller font for dashboard-style compact logs */
             }
             QScrollArea {
                 border: none;
@@ -1019,7 +1406,9 @@ _qt_app = None                                                                  
 _qt_window = None                                                                                                                     # Shared main settings window instance
 _qt_tray = None                                                                                                                       # Shared system tray icon instance
 
-def open_settings(on_pause_resume=None, on_quit=None, get_pause_state=None, on_ready=None):
+def open_settings(on_toggle_pause_all=None, on_toggle_pause_email=None, on_toggle_pause_automation_loop=None,
+                  on_quit=None, get_pause_states=None, on_ready=None,):
+    
     global _qt_app, _qt_window, _qt_tray
 
     # Enable high DPI scaling
@@ -1039,11 +1428,15 @@ def open_settings(on_pause_resume=None, on_quit=None, get_pause_state=None, on_r
         app.setWindowIcon(QIcon(icon_path))                                                                                           # Taskbar/application icon
 
     if _qt_window is None:
-        _qt_window = SettingsWindow(on_pause_resume=on_pause_resume, on_quit=on_quit, get_pause_state=get_pause_state, on_ready=on_ready,)  # Create main window once
+        _qt_window = SettingsWindow(on_toggle_pause_all=on_toggle_pause_all,                                                          # Main window Pause All button
+            on_toggle_pause_email=on_toggle_pause_email,                                                                              # Main window menu item for email_to_sheets
+            on_toggle_pause_automation_loop=on_toggle_pause_automation_loop,                                                          # Main window menu item for automation loop
+            on_quit=on_quit, get_pause_states=get_pause_states, on_ready=on_ready,)                                                   # Create main window once
 
     if _qt_tray is None:
         if QSystemTrayIcon.isSystemTrayAvailable():
-            _qt_tray = AppTrayIcon(_qt_window, on_pause_resume=on_pause_resume, on_quit=on_quit, get_pause_state=get_pause_state,)    # Create tray icon once
+            _qt_tray = AppTrayIcon(_qt_window, on_toggle_pause_all=on_toggle_pause_all, on_quit=on_quit,
+                                   get_pause_states=get_pause_states,)                                                                # Create tray icon once
             _qt_tray.show()                                                                                                           # Show tray icon in system tray
 
         else:
