@@ -55,6 +55,12 @@ python RQI_EmailSheets/email_to_sheets.py
 
 ## Building Executable
 
+Run this command from the **project root directory** before building to ensure a clean spec-based build:
+
+```powershell
+pyinstaller master_control.spec --clean
+```
+
 To create a standalone executable using PyInstaller, run the following command from the **project root directory**:
 
 **Mac/Linux:**
