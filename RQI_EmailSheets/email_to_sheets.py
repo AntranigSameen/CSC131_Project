@@ -240,6 +240,10 @@ def extract_fields(text: str) -> dict:
         if m:
             fields["Email"] = m.group(0)
 
+    # UserID should match Email address
+    if fields["Email"]:
+        fields["UserID"] = fields["Email"]
+
     return fields
 
 
@@ -251,7 +255,15 @@ def extract_appointment_fields(text: str) -> dict:
         "for_name": "",
         "what": "",
         "when": "",
-        "where": ""
+        "where": "",
+        "phone": "",
+        "price": "",
+        "paid_online": "",
+        "street_address_1": "",
+        "street_address_2": "",
+        "city": "",
+        "state": "",
+        "zip": ""
     }
 
     fields_by_label = _extract_values_by_known_labels(
@@ -261,6 +273,14 @@ def extract_appointment_fields(text: str) -> dict:
             "what": ["What"],
             "when": ["When"],
             "where": ["Where"],
+            "phone": ["Phone"],
+            "price": ["Price"],
+            "paid_online": ["Paid Online"],
+            "street_address_1": ["Street Address Line 1"],
+            "street_address_2": ["Street Address Line 2"],
+            "city": ["City"],
+            "state": ["State"],
+            "zip": ["ZIP"],
         },
         stop_labels=[
             "LocationID", "Location ID",
@@ -287,6 +307,14 @@ def extract_appointment_fields(text: str) -> dict:
     appointment["what"] = fields_by_label.get("what", "")
     appointment["when"] = fields_by_label.get("when", "")
     appointment["where"] = fields_by_label.get("where", "")
+    appointment["phone"] = fields_by_label.get("phone", "")
+    appointment["price"] = fields_by_label.get("price", "")
+    appointment["paid_online"] = fields_by_label.get("paid_online", "")
+    appointment["street_address_1"] = fields_by_label.get("street_address_1", "")
+    appointment["street_address_2"] = fields_by_label.get("street_address_2", "")
+    appointment["city"] = fields_by_label.get("city", "")
+    appointment["state"] = fields_by_label.get("state", "")
+    appointment["zip"] = fields_by_label.get("zip", "")
 
     return appointment
 
@@ -609,17 +637,62 @@ def create_calendar_event(token: str, email_body: str, lead_name: str = "", lead
 
         start_datetime, end_datetime = date_times
         person_name = appointment["for_name"] or lead_name or "Appointment"
-        subject = f"{person_name} - {appointment['what']}" if appointment["what"] else person_name
+        course_title = appointment["what"] or "Appointment"
+        
+        # Extract location name (before the address if it contains one)
+        location = appointment["where"] or ""
+        location_display = location.split(",")[0] if location else "See details"
+        
+        # Format title as "Name: Course (Location)"
+        subject = f"{person_name}: {course_title} ({location_display})"
 
+        # Build event body with formatted information
         body_content = ""
+        
+        # Add datetime display
+        try:
+            from datetime import datetime
+            start_dt = datetime.fromisoformat(start_datetime)
+            formatted_date = start_dt.strftime("%B %d, %Y %I:%M%p %Z").replace(" 0", " ")
+            body_content += f"{formatted_date}\n"
+        except:
+            body_content += f"{appointment['when']}\n"
+        
+        body_content += "Calendar: CPR Lifeline\n"
+        
+        # Add name, phone, email
         if person_name:
-            body_content += f"Student: {person_name}\n"
-        if appointment["what"]:
-            body_content += f"Class: {appointment['what']}\n"
-        if appointment["where"]:
-            body_content += f"\nLocation:\n{appointment['where']}\n"
+            body_content += f"Name: {person_name}\n"
+        if appointment["phone"]:
+            body_content += f"Phone: {appointment['phone']}\n"
         if lead_email:
-            body_content += f"\nEmail: {lead_email}\n"
+            body_content += f"Email: {lead_email}\n"
+        
+        # Add price information
+        if appointment["price"]:
+            body_content += f"Price: {appointment['price']}\n"
+        if appointment["paid_online"]:
+            body_content += f"Paid Online: {appointment['paid_online']}\n"
+        
+        # Add location section
+        if location:
+            body_content += f"\nLocation\n============\n{location}\n"
+        
+        # Add address section
+        if appointment["street_address_1"]:
+            body_content += f"\nAddress\n============\n"
+            body_content += f"Street Address Line 1\n{appointment['street_address_1']}\n"
+            if appointment["street_address_2"]:
+                body_content += f"\nStreet Address Line 2\n{appointment['street_address_2']}\n"
+            if appointment["city"]:
+                body_content += f"\nCity\n{appointment['city']}\n"
+            if appointment["state"]:
+                body_content += f"\nState\n{appointment['state']}\n"
+            if appointment["zip"]:
+                body_content += f"\nZIP\n{appointment['zip']}\n"
+        
+        # Add cancellation/rescheduling info
+        body_content += f"\nCancellation/Rescheduling info\n============\nI have read and agree to the terms above: yes\n"
 
         event_body = {
             "subject": subject,
@@ -629,14 +702,14 @@ def create_calendar_event(token: str, email_body: str, lead_name: str = "", lead
             },
             "start": {
                 "dateTime": start_datetime,
-                "timeZone": "America/Los_Angeles"
+                "timeZone": "America/Chicago"
             },
             "end": {
                 "dateTime": end_datetime,
-                "timeZone": "America/Los_Angeles"
+                "timeZone": "America/Chicago"
             },
             "location": {
-                "displayName": appointment["where"] if appointment["where"] else "See details"
+                "displayName": location if location else "See details"
             },
             "isReminderOn": True,
             "reminderMinutesBeforeStart": 60
