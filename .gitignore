@@ -1,27 +1,69 @@
-# Python virtual environments
+# ==================
+# Python
+# ==================
 .venv/
-
-# Environment files
-.env
-*.env
-
-# Google service account (keep out of VCS)
-service_account.json
-
-# Byte-compiled / optimized / DLL files
+venv/
+env/
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
 
-# Logs
+# ==================
+# Credentials & Auth
+# ==================
+.env
+*.env
+service_account.json
+google_sheet_api_key.json
+google_sheets_api_key.json
+apikey.json
+aha_auth.json
+token_cache.json
+*.pem
+*.key
+Scheduling/info.txt
+
+# ==================
+# Build & Distribution
+# ==================
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+*.spec.bak
+
+# ==================
+# Logs & Data Files
+# ==================
 *.log
+extracted_data.txt
+last_processed_index.txt
+queue_status.txt
+automation_status.txt
 
-# IDE/editor folders
+# ==================
+# Playwright & Screenshots
+# ==================
+shots/
+playwright-state.json
+.playwright/
+
+# ==================
+# IDE & Editors
+# ==================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
 
-# OS files
+# ==================
+# OS Files
+# ==================
 .DS_Store
-
-
-# google sheets api key
-google_sheets_api_key.json
+Thumbs.db
+desktop.ini
