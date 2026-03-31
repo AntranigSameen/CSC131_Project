@@ -1,12 +1,12 @@
-# ====================================================================
+# --------------------------------------------------------------------
 # Email to Google Sheets Integration
-# ====================================================================
+# --------------------------------------------------------------------
 # This script reads unread emails from Microsoft Outlook using the
 # Microsoft Graph API and automatically extracts employee information
 # (LocationID, Name, Email, HireDate, etc.) to append as rows in a
 # Google Sheet. It can also create Office 365 calendar events from
 # appointment details found in the email body.
-# ====================================================================
+# --------------------------------------------------------------------
 
 # Standard library imports for file handling, pattern matching, timing, and logging
 import os
@@ -20,7 +20,6 @@ from typing import Dict, Any, List
 # Third-party imports
 import requests  # For making HTTP requests to Microsoft Graph API
 import gspread  # For Google Sheets integration
-#from dotenv import load_dotenv  # For loading environment variables from .env file
 from google.oauth2.service_account import Credentials  # For Google Sheets authentication
 
 # Authentication module from Proper_MS(handles Microsoft OAuth2 device flow)
@@ -33,12 +32,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from Proper_MS.outlook_authentication import authenticate
 from Proper_MS.utils import resource_path
 
-# =====================
+# --------------------------------------------------------------------
 # Environment Variables
-# =====================
+# --------------------------------------------------------------------
 # Load configuration from .env file in the same directory
 
-#load_dotenv()
 INTERVAL = os.getenv("INTERVAL", "10") # Defaults to 10 Seconds
 
 
@@ -63,9 +61,9 @@ SERVICE_ACCOUNT_JSON = resource_path(SERVICE_ACCOUNT_JSON_NAME.name if hasattr(S
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 
-# ====================================================================
+# --------------------------------------------------------------------
 # Helper Functions
-# ====================================================================
+# --------------------------------------------------------------------
 
 def strip_html_tags(html_content: str) -> str:
     """
@@ -737,9 +735,9 @@ def message_sender_address(msg: Dict[str, Any]) -> str:
         return ""
 
 
-# ====================================================================
+# --------------------------------------------------------------------
 # Main Processing Logic
-# ====================================================================
+# --------------------------------------------------------------------
 
 def main():
     """
@@ -838,9 +836,9 @@ def main():
             print(f"   ⚠️ Calendar event failures: {calendar_events_failed}")
 
 
-# ====================
-# Runs Script Forever
-# ====================
+# --------------------------------------------------------------------
+# Run Forever
+# --------------------------------------------------------------------
 
 def run_forever(interval=INTERVAL, pause_all_event=None, pause_email_event=None):
     setup_logging()
@@ -860,9 +858,9 @@ def run_forever(interval=INTERVAL, pause_all_event=None, pause_email_event=None)
         time.sleep(int(interval))                                                                                                   # Wait before next check cycle
 
 
-# ====================================================================
+# --------------------------------------------------------------------
 # Script Entry Point
-# ====================================================================
+# --------------------------------------------------------------------
 
 if __name__ == "__main__":
     setup_logging()
