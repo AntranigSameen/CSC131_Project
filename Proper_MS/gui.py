@@ -747,6 +747,8 @@ class SettingsWindow(QMainWindow):
             "SENDER_EMAIL": "Sender Email Address",
             "KEYWORD_NAME": "Keyword Before Name",
             "INTERVAL": "Automation Interval (seconds)",
+
+            "SENDER_EMAIL_RQI": "Sender Email for RQI Parsing",
         }                                                                                                                             # All editable email-related env fields
 
         for key, label in fields.items():
