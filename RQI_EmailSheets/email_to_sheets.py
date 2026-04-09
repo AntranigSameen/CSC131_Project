@@ -14,8 +14,11 @@ import re
 import time
 import logging
 import sys
+import csv
+import threading
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 
 # Third-party imports
 import requests  # For making HTTP requests to Microsoft Graph API
@@ -60,10 +63,367 @@ SERVICE_ACCOUNT_JSON = resource_path(SERVICE_ACCOUNT_JSON_NAME.name if hasattr(S
 # Microsoft Graph API base URL for making API calls
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
+# --------------------------------------------------------------------
+# CSV Export / SFTP Configuration
+# --------------------------------------------------------------------
+
+DEFAULT_CSV_FILENAME = "preprod_cl.csv"                                                                                               # Default CSV file name used inside each time-window folder
+DEFAULT_BATCH_MINUTES = 15                                                                                                            # Default upload window length in minutes
+
+_batch_state_lock = threading.Lock()                                                                                                  # Prevent concurrent batch state changes across worker/manual actions
+_batch_window_anchor: Optional[datetime] = None                                                                                       # Optional custom upload window anchor set by manual refresh
+_current_batch_start: Optional[datetime] = None                                                                                       # Currently active batch window start time
+_current_batch_dir: Optional[Path] = None                                                                                             # Currently active batch folder path
+_current_batch_csv_path: Optional[Path] = None                                                                                        # Currently active CSV file path
+_uploaded_batch_paths: set[str] = set()                                                                                               # Prevent duplicate SFTP uploads for the same finished batch file
+_last_uploaded_local_path: Optional[str] = None                                                                                       # Full local path of the most recently uploaded CSV batch
+_last_uploaded_remote_path: Optional[str] = None                                                                                      # Full remote SFTP destination of the most recently uploaded CSV batch
+_last_upload_time: Optional[str] = None                                                                                               # Timestamp string for the most recent successful SFTP upload
+_last_upload_error: str = ""                                                                                                          # Most recent SFTP upload error message for GUI display/debugging
 
 # --------------------------------------------------------------------
 # Helper Functions
 # --------------------------------------------------------------------
+
+def _get_env_int(name: str, default: int) -> int:
+    raw_value = (os.getenv(name) or "").strip()                                                                                       # Read integer-like env value safely
+    try:
+        parsed_value = int(raw_value)
+        return parsed_value if parsed_value > 0 else default                                                                          # Use default when value is invalid or non-positive
+    except Exception:
+        return default                                                                                                                # Use default when env value cannot be parsed as integer
+
+
+def _get_csv_export_dir() -> Path:
+    export_dir = (os.getenv("RQI_CSV_EXPORT_DIR") or "").strip()                                                                      # Root folder chosen by user for CSV exports
+    if export_dir:
+        return Path(export_dir)
+
+    return PROJECT_ROOT / "RQI_CSV_Exports"                                                                                           # Fallback export directory when user has not configured one yet
+
+
+def _get_csv_filename() -> str:
+    csv_filename = (os.getenv("RQI_CSV_FILENAME") or "").strip()                                                                      # Fixed CSV file name stored inside each time-window subfolder
+    if csv_filename:
+        return csv_filename
+
+    return DEFAULT_CSV_FILENAME                                                                                                       # Fallback fixed CSV file name
+
+
+def _get_batch_minutes() -> int:
+    return _get_env_int("RQI_CSV_BATCH_MINUTES", DEFAULT_BATCH_MINUTES)                                                               # Read upload window size from env with safe fallback
+
+
+def _get_sftp_host() -> str:
+    return (os.getenv("RQI_SFTP_HOST") or "").strip()                                                                                 # SFTP server host name
+
+
+def _get_sftp_port() -> int:
+    return _get_env_int("RQI_SFTP_PORT", 22)                                                                                          # SFTP server port
+
+
+def _get_sftp_username() -> str:
+    return (os.getenv("RQI_SFTP_USERNAME") or "").strip()                                                                             # SFTP username
+
+
+def _get_sftp_password() -> str:
+    return (os.getenv("RQI_SFTP_PASSWORD") or "").strip()                                                                             # SFTP password
+
+
+def _get_sftp_remote_path() -> str:
+    return (os.getenv("RQI_SFTP_REMOTE_PATH") or "").strip()                                                                          # Remote server folder path
+
+def _get_sftp_file_name() -> str:
+    configured_name = (os.getenv("RQI_SFTP_FILE_NAME") or "").strip()                                                                 # Base remote file name provided by user
+    configured_type = (os.getenv("RQI_SFTP_FILE_TYPE") or "").strip().lstrip(".")                                                     # Remote file extension provided by user
+
+    if configured_name and "." in configured_name:
+        return configured_name                                                                                                        # Keep full remote file name when extension already included
+
+    if configured_name and configured_type:
+        return f"{configured_name}.{configured_type}"                                                                                 # Build remote file name from name + type
+
+    if configured_name:
+        return configured_name                                                                                                        # Use plain configured file name when no type is provided
+
+    return _get_csv_filename()                                                                                                        # Fall back to local fixed CSV file name
+
+def validate_sftp_settings() -> List[str]:
+    missing_items: List[str] = []
+
+    if not _get_sftp_host():
+        missing_items.append("Host Name")                                                                                             # Required to open the SFTP connection
+
+    if not _get_sftp_username():
+        missing_items.append("Username")                                                                                              # Required to authenticate to SFTP
+
+    if not _get_sftp_password():
+        missing_items.append("Password")                                                                                              # Required to authenticate to SFTP
+
+    if not _get_sftp_remote_path():
+        missing_items.append("Remote File Path")                                                                                      # Required so uploads know where to land on the SFTP server
+
+    return missing_items                                                                                                              # Return all missing SFTP fields so GUI can block upload and show one clean validation message
+
+def _floor_datetime_to_interval(now: datetime, minutes: int) -> datetime:
+    floored_minute = (now.minute // minutes) * minutes                                                                                # Round current time down to nearest interval boundary
+    return now.replace(minute=floored_minute, second=0, microsecond=0)                                                                # Return clean batch window start time
+
+
+def _resolve_batch_start(now: Optional[datetime] = None) -> datetime:
+    current_time = now or datetime.now()                                                                                              # Use current local time unless caller provides an override
+    batch_minutes = _get_batch_minutes()                                                                                              # Current upload window length
+
+    with _batch_state_lock:
+        if _batch_window_anchor is None:
+            return _floor_datetime_to_interval(current_time, batch_minutes)                                                           # Default schedule uses normal clock-aligned batch windows
+
+        elapsed_seconds = max(0.0, (current_time - _batch_window_anchor).total_seconds())                                             # Seconds since manual upload-window refresh anchor
+        bucket_index = int(elapsed_seconds // (batch_minutes * 60))                                                                   # Count how many full windows have elapsed since the anchor
+        return _batch_window_anchor + timedelta(minutes=bucket_index * batch_minutes)                                                 # Start time of the current anchored upload window
+
+
+def _format_batch_folder_name(batch_start: datetime) -> str:
+    return batch_start.strftime("%Y-%m-%d_%H-%M-%S")                                                                                  # Unique subfolder name for one upload window
+
+def _get_current_batch_end(batch_start: datetime) -> datetime:
+    batch_minutes = _get_batch_minutes()                                                                                              # Current upload window size used to determine when active batch ends
+    return batch_start + timedelta(minutes=batch_minutes)                                                                             # End time of the active batch window
+
+def get_current_batch_status() -> Dict[str, Any]:
+    now = datetime.now()                                                                                                              # Current local time used for countdown and active-window status
+    batch_start = _resolve_batch_start(now)                                                                                           # Active batch window start time based on current anchor and interval
+    batch_end = _get_current_batch_end(batch_start)                                                                                   # Active batch window end time
+    seconds_remaining = max(0, int((batch_end - now).total_seconds()))                                                                # Countdown in seconds until this CSV batch window rolls over
+
+    latest_csv_path = get_latest_batch_csv_path()                                                                                     # Most recent local CSV batch file path for GUI display
+
+    return {
+        "batch_start": batch_start.strftime("%Y-%m-%d %H:%M:%S"),                                                                     # Readable active batch window start time
+        "batch_end": batch_end.strftime("%Y-%m-%d %H:%M:%S"),                                                                         # Readable active batch window end time
+        "seconds_remaining": seconds_remaining,                                                                                       # Countdown value for GUI timer display
+        "current_csv_path": str(_current_batch_csv_path) if _current_batch_csv_path else "",                                          # Active CSV batch path if one exists
+        "latest_csv_path": str(latest_csv_path) if latest_csv_path else "",                                                           # Latest CSV batch path even if current batch state was not initialized yet
+        "last_uploaded_local_path": _last_uploaded_local_path or "",                                                                  # Most recent uploaded local CSV file
+        "last_uploaded_remote_path": _last_uploaded_remote_path or "",                                                                # Most recent uploaded remote SFTP destination
+        "last_upload_time": _last_upload_time or "",                                                                                  # Timestamp of last successful upload
+        "last_upload_error": _last_upload_error or "",                                                                                # Most recent upload error text for GUI display
+    }
+
+def _build_batch_paths(batch_start: datetime) -> Tuple[Path, Path]:
+    export_dir = _get_csv_export_dir()                                                                                                # Root export directory selected by user
+    batch_dir = export_dir / _format_batch_folder_name(batch_start)                                                                   # Unique subfolder for the active upload window
+    csv_path = batch_dir / _get_csv_filename()                                                                                        # Fixed CSV file name inside each batch folder
+    return batch_dir, csv_path
+
+
+def _ensure_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)                                                                                           # Create directory tree when it does not already exist
+
+
+def _write_csv_header_if_needed(csv_path: Path, headers: List[str]) -> None:
+    needs_header = not csv_path.exists() or csv_path.stat().st_size == 0                                                             # Header is required for brand-new or empty CSV files
+
+    if needs_header:
+        with open(csv_path, "a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(headers)                                                                                                  # Write one fixed header row at the top of each CSV file
+
+
+def _ensure_current_batch_files(headers: List[str], force_new_batch: bool = False) -> Path:
+    global _current_batch_start, _current_batch_dir, _current_batch_csv_path
+
+    current_batch_start = _resolve_batch_start()                                                                                      # Determine the active upload window start time
+    current_batch_dir, current_batch_csv_path = _build_batch_paths(current_batch_start)                                              # Build the active subfolder path and CSV path
+
+    with _batch_state_lock:
+        batch_changed = force_new_batch or _current_batch_start != current_batch_start or _current_batch_csv_path != current_batch_csv_path
+
+        if batch_changed:
+            _current_batch_start = current_batch_start                                                                                # Save active batch start time in shared state
+            _current_batch_dir = current_batch_dir                                                                                    # Save active batch folder path in shared state
+            _current_batch_csv_path = current_batch_csv_path                                                                          # Save active CSV file path in shared state
+
+        _ensure_directory(_current_batch_dir)                                                                                         # Ensure the batch subfolder exists
+        _write_csv_header_if_needed(_current_batch_csv_path, headers)                                                                 # Ensure CSV file exists and has header row
+
+        return _current_batch_csv_path
+
+
+def append_row_to_current_csv(row: List[str], headers: List[str]) -> Path:
+    csv_path = _ensure_current_batch_files(headers)                                                                                   # Ensure current time-window folder and CSV file exist before appending
+
+    with _batch_state_lock:
+        with open(csv_path, "a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(row)                                                                                                      # Append one processed lead row to the active CSV batch
+
+    logging.info("Appended row to CSV batch: %s", csv_path)
+    return csv_path
+
+
+def get_latest_batch_csv_path() -> Optional[Path]:
+    with _batch_state_lock:
+        if _current_batch_csv_path and _current_batch_csv_path.exists():
+            return _current_batch_csv_path                                                                                            # Return current active CSV when it exists
+
+    export_dir = _get_csv_export_dir()
+    if not export_dir.exists():
+        return None                                                                                                                   # No export folder means no CSV files exist yet
+
+    matching_files = sorted(export_dir.glob(f"*/{_get_csv_filename()}"))                                                             # Search all batch subfolders for the fixed CSV file name
+    if not matching_files:
+        return None                                                                                                                   # No batch CSV files exist yet
+
+    return matching_files[-1]                                                                                                         # Return newest matching CSV path
+
+
+def _normalize_remote_path(remote_path: str) -> str:
+    normalized = remote_path.replace("\\", "/").strip()                                                                               # Convert Windows-style separators to SFTP-friendly forward slashes
+    if not normalized:
+        return ""                                                                                                                     # Allow empty remote path when uploading into SFTP home directory
+    return normalized.strip("/")                                                                                                      # Remove leading/trailing slashes for safe recursive path creation
+
+
+def _ensure_sftp_directory(sftp, remote_path: str) -> None:
+    normalized = _normalize_remote_path(remote_path)                                                                                  # Clean up remote path before creating it recursively
+    if not normalized:
+        return                                                                                                                        # No remote directory creation needed when uploading into home directory
+
+    current_path = ""
+    for part in normalized.split("/"):
+        current_path = f"{current_path}/{part}" if current_path else part                                                             # Build path one segment at a time
+        try:
+            sftp.stat(current_path)
+        except FileNotFoundError:
+            sftp.mkdir(current_path)                                                                                                  # Create missing remote directory segment
+
+
+def upload_csv_to_sftp(csv_path: Path, mark_uploaded: bool = True) -> str:
+    global _last_uploaded_local_path, _last_uploaded_remote_path, _last_upload_time, _last_upload_error
+    
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file does not exist: {csv_path}")                                                              # Stop immediately when local file path is invalid
+
+    host = _get_sftp_host()
+    username = _get_sftp_username()
+    password = _get_sftp_password()
+    remote_path = _get_sftp_remote_path()
+    remote_file_name = _get_sftp_file_name()
+    port = _get_sftp_port()
+
+    if not host or not username or not password:
+        raise RuntimeError("Missing SFTP configuration. Set host, username, password, and remote path in the GUI first.")             # Require minimum connection settings before attempting upload
+
+    import paramiko                                                                                                                   # Imported here so local CSV testing still works even before paramiko is installed
+
+    transport = None
+    sftp = None
+
+    try:
+        transport = paramiko.Transport((host, port))
+        transport.connect(username=username, password=password)                                                                       # Open authenticated SFTP connection
+        sftp = paramiko.SFTPClient.from_transport(transport)
+
+        _ensure_sftp_directory(sftp, remote_path)                                                                                     # Create remote folder tree when needed
+
+        normalized_remote_path = _normalize_remote_path(remote_path)
+        remote_file_full_path = f"{normalized_remote_path}/{remote_file_name}" if normalized_remote_path else remote_file_name        # Full destination path for the uploaded CSV file
+
+        sftp.put(str(csv_path), remote_file_full_path)                                                                                # Upload local CSV file to configured SFTP destination
+        logging.info("Uploaded CSV to SFTP: %s -> %s", csv_path, remote_file_full_path)
+
+        _last_uploaded_local_path = str(csv_path)                                                                                     # Save most recent successfully uploaded local CSV path for GUI display
+        _last_uploaded_remote_path = remote_file_full_path                                                                            # Save most recent successful remote SFTP destination for GUI display
+        _last_upload_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")                                                              # Save timestamp of most recent successful upload for GUI display
+        _last_upload_error = ""                                                                                                       # Clear prior upload error because latest upload succeeded
+
+        if mark_uploaded:
+            _uploaded_batch_paths.add(str(csv_path))                                                                                  # Track already-uploaded batches so auto-upload does not repeat them
+
+        return remote_file_full_path
+
+    except Exception as e:
+        _last_upload_error = str(e)                                                                                                   # Save upload error message for GUI display and debugging
+        raise
+
+    finally:
+        if sftp is not None:
+            sftp.close()                                                                                                              # Close SFTP client cleanly after upload attempt
+        if transport is not None:
+            transport.close()                                                                                                         # Close underlying SSH transport cleanly
+
+
+def maybe_roll_batch_window(headers: List[str]) -> Optional[Path]:
+    global _current_batch_start, _current_batch_dir, _current_batch_csv_path
+
+    next_batch_start = _resolve_batch_start()                                                                                         # Determine which upload window should be active right now
+
+    with _batch_state_lock:
+        previous_batch_start = _current_batch_start                                                                                   # Snapshot current batch state before deciding whether to roll
+        previous_csv_path = _current_batch_csv_path
+
+    if previous_batch_start is None:
+        return _ensure_current_batch_files(headers)                                                                                   # No batch exists yet, so create the first one immediately
+
+    if next_batch_start == previous_batch_start:
+        return previous_csv_path                                                                                                      # Same upload window is still active, so keep using current CSV file
+
+    if previous_csv_path and previous_csv_path.exists() and str(previous_csv_path) not in _uploaded_batch_paths:
+        try:
+            upload_csv_to_sftp(previous_csv_path, mark_uploaded=True)                                                                 # Upload completed batch automatically when window rolls over
+        except Exception:
+            logging.exception("Automatic SFTP upload failed for completed CSV batch: %s", previous_csv_path)
+
+    with _batch_state_lock:
+        _current_batch_start = None                                                                                                   # Clear old batch state so next ensure call creates a fresh batch window
+        _current_batch_dir = None
+        _current_batch_csv_path = None
+
+    return _ensure_current_batch_files(headers, force_new_batch=True)                                                                 # Create the new batch folder and CSV file immediately
+
+
+def generate_csv_now(headers: Optional[List[str]] = None) -> Path:
+    effective_headers = headers or list(DEFAULT_HEADERS)                                                                              # Use caller-provided headers or default lead export headers
+    csv_path = _ensure_current_batch_files(effective_headers)                                                                         # Create current batch folder/CSV immediately when requested
+    logging.info("Generated current CSV batch on demand: %s", csv_path)
+    return csv_path
+
+
+def upload_latest_csv_now() -> str:
+    csv_path = get_latest_batch_csv_path()
+    if not csv_path:
+        raise RuntimeError("No CSV batch file exists yet. Generate a CSV first before uploading.")                                   # Manual upload requires at least one created CSV file
+
+    remote_destination = upload_csv_to_sftp(csv_path, mark_uploaded=False)                                                           # Manual upload should always run, even if file was uploaded before
+    logging.info("Manual SFTP upload completed for CSV batch: %s", csv_path)
+    return remote_destination
+
+
+def refresh_upload_window(headers: Optional[List[str]] = None) -> Path:
+    global _batch_window_anchor, _current_batch_start, _current_batch_dir, _current_batch_csv_path
+
+    effective_headers = headers or list(DEFAULT_HEADERS)                                                                              # Use caller-provided headers or default lead export headers
+
+    with _batch_state_lock:
+        previous_csv_path = _current_batch_csv_path                                                                                   # Capture current batch file before starting a new anchored window
+
+    if previous_csv_path and previous_csv_path.exists() and str(previous_csv_path) not in _uploaded_batch_paths:
+        try:
+            upload_csv_to_sftp(previous_csv_path, mark_uploaded=True)                                                                 # Close and upload the current batch immediately before starting a new window anchor
+        except Exception:
+            logging.exception("Automatic SFTP upload failed while refreshing upload window: %s", previous_csv_path)
+
+    with _batch_state_lock:
+        _batch_window_anchor = datetime.now().replace(microsecond=0)                                                                  # Start a brand-new upload window from the exact time the user requested
+        _current_batch_start = None                                                                                                   # Clear current batch state so a new folder and CSV are created immediately
+        _current_batch_dir = None
+        _current_batch_csv_path = None
+
+    csv_path = _ensure_current_batch_files(effective_headers, force_new_batch=True)                                                   # Create a new upload-window folder and CSV immediately
+    logging.info("Upload window refreshed. New batch starts now: %s", csv_path)
+    return csv_path
+
 
 def strip_html_tags(html_content: str) -> str:
     """
@@ -754,6 +1114,8 @@ def main():
         sheet_headers = DEFAULT_HEADERS
     logging.info("Using worksheet headers for mapping: %s", sheet_headers)
 
+    maybe_roll_batch_window(sheet_headers)                                                                                            # Ensure the current CSV batch exists before processing any unread emails
+
     token = authenticate()
     if not token:
         raise RuntimeError("Authentication failed: no access token returned.")
@@ -802,6 +1164,9 @@ def main():
         try:
             ws.append_row(row, value_input_option="RAW")
             logging.info("Appended row to sheet for message subject: %s", subject)
+
+            append_row_to_current_csv(row, sheet_headers)                                                                             # Append the same processed lead row into the active CSV batch for SFTP upload
+            logging.info("Appended row to current CSV batch for message subject: %s", subject)
         except Exception as e:
             logging.error("Failed to append row to sheet: %s", e)
             print(f"✗ Failed to append row / subject: {subject} / from: {sender}")
@@ -851,6 +1216,7 @@ def run_forever(interval=INTERVAL, pause_all_event=None, pause_email_event=None)
             pause_email_event.wait()                                                                                                # Block when user pauses only email_to_sheets
 
         try:
+            maybe_roll_batch_window(DEFAULT_HEADERS)                                                                                # Auto-close/upload previous batch and create new batch when upload window rolls over
             main()
         except Exception:
             logging.exception("Email to sheets error")
@@ -866,6 +1232,7 @@ if __name__ == "__main__":
     setup_logging()
 
     try:
+        generate_csv_now()                                                                                                          # Ensure a current CSV batch exists when running the file directly for testing
         main()
     except KeyboardInterrupt:
         logging.info("Stopped by user")

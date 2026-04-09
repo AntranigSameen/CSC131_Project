@@ -38,7 +38,9 @@ from outlook_authentication import authenticate
 from run_helper import run_cycle
 from run_automation import run_demo
 
-from RQI_EmailSheets.email_to_sheets import run_forever as email_to_sheets_worker
+from RQI_EmailSheets.email_to_sheets import (run_forever as email_to_sheets_worker,
+                                             generate_csv_now, upload_latest_csv_now, refresh_upload_window,
+                                             get_current_batch_status, validate_sftp_settings,)
 
 # =============================
 # Set up Logging with Log File
@@ -216,6 +218,68 @@ def toggle_pause_email_to_sheets():
 # END PAUSE / RESUME ACTIONS
 # ===========================
 
+# =======================
+# RQI CSV / SFTP ACTIONS
+# =======================
+
+def trigger_rqi_csv_generation():
+    try:
+        csv_path = generate_csv_now()                                                                                                # Create the current CSV batch immediately on demand
+        logging.info("Manual CSV generation completed: %s", csv_path)
+        return str(csv_path)                                                                                                         # Return created CSV path so GUI can show success message
+    except Exception as e:
+        logging.exception("Manual CSV generation failed: %s", e)
+        raise                                                                                                                        # Re-raise so GUI can show the real error message
+
+
+def trigger_rqi_sftp_upload():
+    try:
+        remote_path = upload_latest_csv_now()                                                                                        # Upload the most recent CSV batch immediately on demand
+        logging.info("Manual SFTP upload completed: %s", remote_path)
+        return remote_path                                                                                                           # Return remote upload destination so GUI can show success message
+    except Exception as e:
+        logging.exception("Manual SFTP upload failed: %s", e)
+        raise                                                                                                                        # Re-raise so GUI can show the real error message
+
+
+def trigger_rqi_upload_window_refresh():
+    try:
+        csv_path = refresh_upload_window()                                                                                           # Start a brand-new upload window immediately and create its CSV batch
+        logging.info("Manual upload window refresh completed: %s", csv_path)
+        return str(csv_path)                                                                                                         # Return new CSV path so GUI can show success message
+    except Exception as e:
+        logging.exception("Manual upload window refresh failed: %s", e)
+        raise                                                                                                                        # Re-raise so GUI can show the real error message
+
+def get_rqi_csv_sftp_status():
+    try:
+        return get_current_batch_status()                                                                                            # Return live batch-window countdown, current CSV path, last upload info, and last upload error for GUI display
+    except Exception as e:
+        logging.exception("Failed to get RQI CSV / SFTP status: %s", e)
+        return {
+            "batch_start": "",
+            "batch_end": "",
+            "seconds_remaining": 0,
+            "current_csv_path": "",
+            "latest_csv_path": "",
+            "last_uploaded_local_path": "",
+            "last_uploaded_remote_path": "",
+            "last_upload_time": "",
+            "last_upload_error": str(e),
+        }                                                                                                                            # Return safe fallback status so GUI can stay alive even if backend status lookup fails
+
+
+def get_missing_sftp_fields():
+    try:
+        return validate_sftp_settings()                                                                                              # Return a list of human-readable missing SFTP settings so GUI can validate before upload
+    except Exception as e:
+        logging.exception("Failed to validate SFTP settings: %s", e)
+        return [str(e)]                                                                                                              # Return backend validation error as one message so GUI can show it cleanly
+
+# ===========================
+# END RQI CSV / SFTP ACTIONS
+# ===========================
+
 def quit_application(icon=None):
     logging.info("Exiting Application")
     os._exit(0)                                                                                                                      # Immediately terminate entire program
@@ -324,6 +388,11 @@ def open_settings_window():
     open_settings(on_toggle_pause_all=toggle_pause_all,                                                                              # Main GUI/tray action for pausing all automation
         on_toggle_pause_email=toggle_pause_email_to_sheets,                                                                          # GUI action for pausing email_to_sheets only
         on_toggle_pause_automation_loop=toggle_pause_automation_loop,                                                                # GUI action for pausing main automation loop only
+        on_generate_rqi_csv=trigger_rqi_csv_generation,                                                                              # GUI action for manual CSV batch generation
+        on_upload_rqi_csv=trigger_rqi_sftp_upload,                                                                                   # GUI action for manual SFTP upload of latest CSV batch
+        on_refresh_rqi_upload_window=trigger_rqi_upload_window_refresh,                                                              # GUI action for starting a brand-new upload window immediately
+        get_rqi_csv_sftp_status=get_rqi_csv_sftp_status,                                                                             # GUI status callback for live batch window countdown and last upload info
+        get_missing_sftp_fields=get_missing_sftp_fields,                                                                             # GUI validation callback for missing SFTP settings before upload
         on_quit=quit_application,
         get_pause_states=get_pause_states,
         on_ready=bootstrap_after_gui,)

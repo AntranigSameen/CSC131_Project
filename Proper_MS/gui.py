@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, QTimer, QSize, QRect, QPropertyAnimation, QEasing
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
-                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout,)
+                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 
@@ -35,6 +35,9 @@ RESTART_REQUIRED = {                                                            
     "SERVICE_ACCOUNT_AHA_JSON",                                                                                                       #
     "AHA_USERNAME",                                                                                                                   #
     "AHA_PASSWORD",                                                                                                                   #
+    "SENDER_EMAIL",                                                                                                                   #
+    "SENDER_EMAIL_RQI",                                                                                                               #
+    "RQI_CSV_BATCH_MINUTES"                                                                                                           #
 }                                                                                                                                     # Settings that require restart after change
 
 
@@ -292,14 +295,22 @@ class AppTrayIcon(QSystemTrayIcon):
 
 class SettingsWindow(QMainWindow):
     def __init__(self, on_toggle_pause_all=None, on_toggle_pause_email=None,
-                 on_toggle_pause_automation_loop=None, on_quit=None,
-                 get_pause_states=None, on_ready=None,):
+                 on_toggle_pause_automation_loop=None, on_generate_rqi_csv=None,
+                 on_upload_rqi_csv=None, on_refresh_rqi_upload_window=None,
+                 get_rqi_csv_sftp_status=None, get_missing_sftp_fields=None,
+                 on_quit=None, get_pause_states=None, on_ready=None,):
         super().__init__()
 
         self.setWindowIcon(QIcon(resource_path("icon.png")))                                                                          # Set window icon in title bar/taskbar
+
         self.on_toggle_pause_all = on_toggle_pause_all                                                                                # Callback for pausing/resuming all automation
         self.on_toggle_pause_email = on_toggle_pause_email                                                                            # Callback for pausing/resuming email_to_sheets
         self.on_toggle_pause_automation_loop = on_toggle_pause_automation_loop                                                        # Callback for pausing/resuming the main automation loop
+        self.on_generate_rqi_csv = on_generate_rqi_csv                                                                                # Callback for manually generating the current RQI CSV batch
+        self.on_upload_rqi_csv = on_upload_rqi_csv                                                                                    # Callback for manually uploading the latest RQI CSV batch to SFTP
+        self.on_refresh_rqi_upload_window = on_refresh_rqi_upload_window                                                              # Callback for starting a brand-new RQI upload window immediately
+        self.get_rqi_csv_sftp_status = get_rqi_csv_sftp_status                                                                        # Callback returning live CSV batch window status, last upload info, and upload errors
+        self.get_missing_sftp_fields = get_missing_sftp_fields                                                                        # Callback returning missing SFTP settings before manual upload
         self.get_pause_states = get_pause_states                                                                                      # Callback returning all current pause states
         self.on_quit = on_quit                                                                                                        # Callback for quit button
         self.entries = {}                                                                                                             # Stores all editable env QLineEdit widgets
@@ -681,7 +692,7 @@ class SettingsWindow(QMainWindow):
 
         root.addLayout(content_row, 1)
 
-        self._build_overview_tab()                                                                                                    # Dashboard page
+        self._build_csv_sftp_tab()                                                                                                    # RQI CSV & SFTP page
         self._build_aha_tab()                                                                                                         # AHA credentials page
         self._build_email_tab()                                                                                                       # Email settings page
         self._build_sheets_tab()                                                                                                      # Google Sheets settings page
@@ -690,7 +701,7 @@ class SettingsWindow(QMainWindow):
         self._build_logs_tab()                                                                                                        # Live logs page
 
         if self.sidebar_buttons:
-            self._set_sidebar_page(0)                                                                                                 # Start on the Overview page when GUI opens
+            self._set_sidebar_page(0)                                                                                                 # Start on the RQI CSV & SFTP page when GUI opens
             QTimer.singleShot(0, lambda: self._move_sidebar_indicator(0))                                                             # Reposition selected pill after layout finishes
 
         self._apply_styles()                                                                                                          # Apply full application stylesheet
@@ -699,26 +710,196 @@ class SettingsWindow(QMainWindow):
     # TAB BUILDERS
     # ==============
 
-    def _build_overview_tab(self):
+    # ===================
+    # RQI CSV & SFTP TAB
+    # ===================
+
+    def _build_csv_sftp_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setSpacing(12)                                                                                                         # Comfortable spacing between sections in the renamed RQI export dashboard
 
-        self.quick_status = QLabel("Checking status...")                                                                              # Quick automation status line
-        self.quick_login = QLabel("Checking login state...")                                                                          # Quick AHA login status line
-        self.quick_mode = QLabel("")                                                                                                  # Quick browser mode line
-        self.quick_queue = QLabel("")                                                                                                 # Quick queue count line
+        title = QLabel("RQI CSV / SFTP")
+        title.setObjectName("SectionTitle")                                                                                           # Main heading for RQI export controls shown only on this tab
 
-        layout.addWidget(QLabel("Application Overview"))
-        layout.addWidget(QLabel("Use this window to manage automation settings, monitor live status, review logs, and control the automation process."))
-        layout.addSpacing(12)
-        layout.addWidget(QLabel("Quick Status"))
-        layout.addWidget(self.quick_status)
-        layout.addWidget(self.quick_login)
-        layout.addWidget(self.quick_mode)
-        layout.addWidget(self.quick_queue)
-        layout.addStretch(1)                                                                                                          # Push content upward
+        subtitle = QLabel(
+            "Manage the RQI CSV export folder, time-window batching, and manual SFTP actions from this page."
+        )
+        subtitle.setWordWrap(True)                                                                                                    # Allow explanatory text to wrap naturally inside the content area
+        subtitle.setObjectName("SectionSubtitle")
 
-        self._add_sidebar_page(ScrollablePage(page), "Overview", "🏠")                                                                # Add overview tab to sidebar navigation
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(8)
+
+        export_form = QFormLayout()
+        export_form.setLabelAlignment(Qt.AlignLeft)
+        export_form.setFormAlignment(Qt.AlignTop)
+        export_form.setSpacing(10)                                                                                                    # Keep form rows readable without taking too much vertical space
+
+        # =========================
+        # Quick live status labels
+        # =========================
+
+        self.quick_status = QLabel("Checking status...")                                                                              # Quick automation status line used by existing refresh logic
+        self.quick_login = QLabel("Checking login state...")                                                                          # Quick AHA login status line used by existing refresh logic
+        self.quick_mode = QLabel("")                                                                                                  # Quick browser mode line used by existing refresh logic
+        self.quick_queue = QLabel("")                                                                                                 # Quick queue count line used by existing refresh logic
+
+        self.quick_status.hide()                                                                                                      # Do not show automation status inside the RQI CSV / SFTP tab
+        self.quick_login.hide()                                                                                                       # Do not show AHA login inside the RQI CSV / SFTP tab
+        self.quick_mode.hide()                                                                                                        # Do not show browser mode inside the RQI CSV / SFTP tab
+        self.quick_queue.hide()                                                                                                       # Do not show queue count inside the RQI CSV / SFTP tab
+
+        # ====================
+        # CSV export settings
+        # ====================
+
+        export_dir_row = QWidget()
+        export_dir_layout = QHBoxLayout(export_dir_row)
+        export_dir_layout.setContentsMargins(0, 0, 0, 0)
+        export_dir_layout.setSpacing(8)
+
+        export_dir_edit = QLineEdit(os.getenv("RQI_CSV_EXPORT_DIR", ""))                                                             # Root folder where time-window CSV subfolders will be created
+        self.entries["RQI_CSV_EXPORT_DIR"] = export_dir_edit                                                                          # Save widget reference so Save Settings writes it into the shared .env file
+
+        browse_export_dir_btn = QPushButton("Browse")
+        browse_export_dir_btn.setObjectName("BrowseButton")                                                                          # Small helper button for choosing export folder from file dialog
+        browse_export_dir_btn.clicked.connect(lambda: self._animate_button_press(browse_export_dir_btn))                             # Animate press before folder chooser opens
+        browse_export_dir_btn.clicked.connect(self._browse_rqi_export_dir)                                                           # Open folder chooser and write result into export path field
+
+        export_dir_layout.addWidget(export_dir_edit, 1)
+        export_dir_layout.addWidget(browse_export_dir_btn)
+
+        export_form.addRow("CSV Export Folder", export_dir_row)
+
+        csv_filename_edit = QLineEdit(os.getenv("RQI_CSV_FILENAME", "rqi_export.csv"))                                               # Fixed file name used inside each date/time upload-window folder
+        self.entries["RQI_CSV_FILENAME"] = csv_filename_edit
+        export_form.addRow("CSV File Name", csv_filename_edit)
+
+        batch_minutes_edit = QLineEdit(os.getenv("RQI_CSV_BATCH_MINUTES", "15"))                                                     # Number of minutes per automatic CSV batch window
+        self.entries["RQI_CSV_BATCH_MINUTES"] = batch_minutes_edit
+        export_form.addRow("Batch Minutes", batch_minutes_edit)
+
+        layout.addLayout(export_form)
+
+        layout.addSpacing(6)
+
+        # =========================
+        # SFTP connection settings
+        # =========================
+
+        sftp_title = QLabel("SFTP Settings")
+        sftp_title.setObjectName("SectionSubtitle")                                                                                   # Secondary heading for remote upload settings
+        layout.addWidget(sftp_title)
+
+        sftp_form = QFormLayout()
+        sftp_form.setLabelAlignment(Qt.AlignLeft)
+        sftp_form.setFormAlignment(Qt.AlignTop)
+        sftp_form.setSpacing(10)
+
+        sftp_fields = {
+            "RQI_SFTP_HOST": "Host Name",
+            "RQI_SFTP_PORT": "Port",
+            "RQI_SFTP_USERNAME": "Username",
+            "RQI_SFTP_REMOTE_PATH": "Remote File Path",
+            "RQI_SFTP_FILE_NAME": "Remote File Name",
+            "RQI_SFTP_FILE_TYPE": "Remote File Type",
+        }                                                                                                                             # Non-password SFTP settings shown as normal line edits
+
+        for key, label in sftp_fields.items():
+            edit = QLineEdit(os.getenv(key, ""))
+            self.entries[key] = edit                                                                                                  # Save widget reference so Save Settings writes it into the shared .env file
+            sftp_form.addRow(label, edit)
+
+        sftp_password_edit = QLineEdit(os.getenv("RQI_SFTP_PASSWORD", ""))
+        sftp_password_edit.setEchoMode(QLineEdit.Password)                                                                            # Hide SFTP password in the GUI the same way AHA password is hidden
+        self.entries["RQI_SFTP_PASSWORD"] = sftp_password_edit
+        sftp_form.addRow("Password", sftp_password_edit)
+
+        layout.addLayout(sftp_form)
+        layout.addSpacing(8)
+
+        # =======================
+        # Live CSV / SFTP status
+        # =======================
+
+        csv_status_title = QLabel("Live CSV / Upload Status")
+        csv_status_title.setObjectName("SectionSubtitle")                                                                             # Secondary heading for current batch window and upload status information
+        layout.addWidget(csv_status_title)
+
+        csv_status_form = QFormLayout()
+        csv_status_form.setLabelAlignment(Qt.AlignLeft)
+        csv_status_form.setFormAlignment(Qt.AlignTop)
+        csv_status_form.setSpacing(10)
+
+        self.rqi_batch_window_label = QLabel("Loading...")                                                                            # Shows current active batch window start and end time
+        self.rqi_batch_countdown_label = QLabel("Loading...")                                                                         # Shows live countdown until current batch window ends
+        self.rqi_current_csv_label = QLabel("Loading...")                                                                             # Shows currently active CSV batch file path
+        self.rqi_last_uploaded_local_label = QLabel("None yet")                                                                       # Shows most recent local CSV file that was uploaded successfully
+        self.rqi_last_uploaded_remote_label = QLabel("None yet")                                                                      # Shows most recent remote SFTP destination used successfully
+        self.rqi_last_upload_time_label = QLabel("None yet")                                                                          # Shows timestamp of most recent successful upload
+        self.rqi_last_upload_error_label = QLabel("")                                                                                 # Shows most recent upload error for debugging/feedback when upload fails
+
+        for status_label in [
+            self.rqi_batch_window_label,
+            self.rqi_batch_countdown_label,
+            self.rqi_current_csv_label,
+            self.rqi_last_uploaded_local_label,
+            self.rqi_last_uploaded_remote_label,
+            self.rqi_last_upload_time_label,
+            self.rqi_last_upload_error_label,
+        ]:
+            status_label.setWordWrap(True)                                                                                            # Allow long file paths and error messages to wrap cleanly inside the tab
+
+        csv_status_form.addRow("Current Batch Window", self.rqi_batch_window_label)
+        csv_status_form.addRow("Time Remaining", self.rqi_batch_countdown_label)
+        csv_status_form.addRow("Current CSV File", self.rqi_current_csv_label)
+        csv_status_form.addRow("Last Uploaded Local File", self.rqi_last_uploaded_local_label)
+        csv_status_form.addRow("Last Uploaded Remote Path", self.rqi_last_uploaded_remote_label)
+        csv_status_form.addRow("Last Upload Time", self.rqi_last_upload_time_label)
+        csv_status_form.addRow("Last Upload Error", self.rqi_last_upload_error_label)
+
+        layout.addLayout(csv_status_form)
+        layout.addSpacing(10)
+
+        # ======================
+        # Manual action buttons
+        # ======================
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
+
+        self.generate_rqi_csv_btn = QPushButton("Generate CSV Now")
+        self.generate_rqi_csv_btn.setObjectName("ActionButton")                                                                       # Manual action button shown only on the csv_sftp tab
+        self.generate_rqi_csv_btn.clicked.connect(lambda: self._animate_button_press(self.generate_rqi_csv_btn))                      # Animate press before manual CSV generation
+        self.generate_rqi_csv_btn.clicked.connect(self._generate_rqi_csv_clicked)                                                     # Trigger backend CSV generation callback
+
+        self.upload_rqi_csv_btn = QPushButton("Upload to SFTP Now")
+        self.upload_rqi_csv_btn.setObjectName("ActionButton")                                                                         # Manual action button shown only on the csv_sftp tab
+        self.upload_rqi_csv_btn.clicked.connect(lambda: self._animate_button_press(self.upload_rqi_csv_btn))                          # Animate press before manual upload
+        self.upload_rqi_csv_btn.clicked.connect(self._upload_rqi_csv_clicked)                                                         # Trigger backend SFTP upload callback
+
+        self.refresh_rqi_window_btn = QPushButton("Refresh Upload Window")
+        self.refresh_rqi_window_btn.setObjectName("ActionButton")                                                                     # Manual action button shown only on the csv_sftp tab
+        self.refresh_rqi_window_btn.clicked.connect(lambda: self._animate_button_press(self.refresh_rqi_window_btn))                  # Animate press before refreshing the upload window
+        self.refresh_rqi_window_btn.clicked.connect(self._refresh_rqi_upload_window_clicked)                                          # Trigger backend upload-window refresh callback
+
+        action_row.addWidget(self.generate_rqi_csv_btn)
+        action_row.addWidget(self.upload_rqi_csv_btn)
+        action_row.addWidget(self.refresh_rqi_window_btn)
+        action_row.addStretch(1)                                                                                                      # Keep manual action buttons aligned neatly on the left
+
+        layout.addLayout(action_row)
+        layout.addStretch(1)                                                                                                          # Push all RQI export controls upward inside the page
+
+        self._add_sidebar_page(ScrollablePage(page), "RQI CSV / SFTP", "🏠")                                                         # Add sidebar page for RQI CSV & SFTP tab
+
+    # ==============
+    # AHA LOGIN TAB
+    # ==============
 
     def _build_aha_tab(self):
         page = QWidget()
@@ -737,7 +918,11 @@ class SettingsWindow(QMainWindow):
         form.addRow("AHA Username", aha_user)
         form.addRow("AHA Password", aha_pass)
 
-        self._add_sidebar_page(ScrollablePage(page), "AHA Login", "🔐")                                                              # Add AHA login page to sidebar navigation
+        self._add_sidebar_page(ScrollablePage(page), "AHA Login", "🔐")                                                               # Add AHA login page to sidebar navigation
+
+    # ================
+    # EMAIL LOGIN TAB
+    # ================
 
     def _build_email_tab(self):
         page = QWidget()
@@ -758,6 +943,10 @@ class SettingsWindow(QMainWindow):
 
         self._add_sidebar_page(ScrollablePage(page), "Email", "📧")                                                                  # Add Email settings page to sidebar navigation
 
+    # ==================
+    # GOOGLE SHEETS TAB
+    # ==================
+
     def _build_sheets_tab(self):
         page = QWidget()
         form = QFormLayout(page)
@@ -775,6 +964,10 @@ class SettingsWindow(QMainWindow):
             form.addRow(label, edit)
 
         self._add_sidebar_page(ScrollablePage(page), "Sheets", "📄")                                                                 # Add Sheets page to sidebar navigation
+
+    # =============================
+    # MICROSOFT AUTHENTICATION TAB
+    # =============================
 
     def _build_auth_tab(self):
         page = QWidget()
@@ -795,6 +988,10 @@ class SettingsWindow(QMainWindow):
 
         self._add_sidebar_page(ScrollablePage(page), "Authentication", "🪪")                                                         # Add Authentication page to sidebar navigation
 
+    # ============
+    # GENERAL TAB
+    # ============
+
     def _build_general_tab(self):
         page = QWidget()
         form = QFormLayout(page)
@@ -810,6 +1007,10 @@ class SettingsWindow(QMainWindow):
             form.addRow(label, edit)
 
         self._add_sidebar_page(ScrollablePage(page), "General", "⚙️")                                                                # Add General settings page to sidebar navigation
+
+    # =========
+    # lOGS TAB
+    # =========
 
     def _build_logs_tab(self):
         page = QWidget()
@@ -828,6 +1029,63 @@ class SettingsWindow(QMainWindow):
     # =================
     # UI INTERACTIONS
     # =================
+
+    def _browse_rqi_export_dir(self):
+        selected_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Select RQI CSV Export Folder",
+            self.entries.get("RQI_CSV_EXPORT_DIR").text().strip() if self.entries.get("RQI_CSV_EXPORT_DIR") else "",
+        )                                                                                                                             # Let user choose the root folder where time-window CSV batch folders should be created
+
+        if selected_dir and "RQI_CSV_EXPORT_DIR" in self.entries:
+            self.entries["RQI_CSV_EXPORT_DIR"].setText(selected_dir)                                                                  # Write selected export folder into the csv_sftp tab field
+
+    def _generate_rqi_csv_clicked(self):
+        if not self.on_generate_rqi_csv:
+            QMessageBox.warning(self, "Unavailable", "Generate CSV action is not connected.")                                         # Guard against missing backend callback
+            return
+
+        try:
+            csv_path = self.on_generate_rqi_csv()                                                                                     # Ask backend to create the current RQI CSV batch immediately
+            QMessageBox.information(self, "CSV Generated", f"CSV created successfully:\n{csv_path}")
+            self._update_rqi_csv_sftp_status()                                                                                        # Refresh visible batch window and CSV file information immediately after generation
+        except Exception as e:
+            QMessageBox.critical(self, "CSV Generation Failed", str(e))                                                               # Show real backend error when manual generation fails
+
+    def _upload_rqi_csv_clicked(self):
+        if not self.on_upload_rqi_csv:
+            QMessageBox.warning(self, "Unavailable", "Upload to SFTP action is not connected.")                                       # Guard against missing backend callback
+            return
+
+        missing_fields = self.get_missing_sftp_fields() if self.get_missing_sftp_fields else []                                       # Ask backend which required SFTP settings are still missing
+        if missing_fields:
+            QMessageBox.warning(
+                self,
+                "Missing SFTP Settings",
+                "Fill in these SFTP settings before uploading:\n\n- " + "\n- ".join(missing_fields),
+            )                                                                                                                         # Block manual upload and show exactly which SFTP fields still need values
+            return
+
+        try:
+            remote_path = self.on_upload_rqi_csv()                                                                                    # Ask backend to upload the latest CSV batch immediately
+            QMessageBox.information(self, "Upload Complete", f"CSV uploaded successfully:\n{remote_path}")
+            self._update_rqi_csv_sftp_status()                                                                                        # Refresh visible last-upload information immediately after successful upload
+        except Exception as e:
+            QMessageBox.critical(self, "SFTP Upload Failed", str(e))                                                                  # Show real backend error when manual upload fails
+            self._update_rqi_csv_sftp_status()                                                                                        # Refresh visible upload-error information immediately after failed upload
+
+    def _refresh_rqi_upload_window_clicked(self):
+        if not self.on_refresh_rqi_upload_window:
+            QMessageBox.warning(self, "Unavailable", "Refresh upload window action is not connected.")                                # Guard against missing backend callback
+            return
+
+        try:
+            csv_path = self.on_refresh_rqi_upload_window()                                                                            # Ask backend to close current batch and start a brand-new upload window immediately
+            QMessageBox.information(self, "Upload Window Refreshed", f"New upload window started:\n{csv_path}")
+            self._update_rqi_csv_sftp_status()                                                                                        # Refresh visible batch window and upload information immediately after refresh
+        except Exception as e:
+            QMessageBox.critical(self, "Refresh Upload Window Failed", str(e))                                                        # Show real backend error when upload window refresh fails
+            self._update_rqi_csv_sftp_status()                                                                                        # Refresh visible upload-error information immediately after failed refresh
 
     def _select_pause_target(self, target):
         self.selected_pause_target = target                                                                                           # Remember which pause action the dropdown selected
@@ -878,6 +1136,46 @@ class SettingsWindow(QMainWindow):
     # UI REFRESHERS
     # ===============
 
+    def _update_rqi_csv_sftp_status(self):
+        if not self.get_rqi_csv_sftp_status:
+            return                                                                                                                    # No backend status callback available, so nothing to refresh
+
+        try:
+            status = self.get_rqi_csv_sftp_status()                                                                                   # Pull current batch window, countdown, and last upload info from backend
+        except Exception as e:
+            logging.exception("Failed to refresh RQI CSV / SFTP status: %s", e)
+            return                                                                                                                    # Leave existing labels untouched if backend status lookup fails unexpectedly
+
+        batch_start = status.get("batch_start", "")
+        batch_end = status.get("batch_end", "")
+        seconds_remaining = int(status.get("seconds_remaining", 0) or 0)
+
+        minutes_remaining = seconds_remaining // 60                                                                                   # Whole minutes remaining in current batch window
+        seconds_remainder = seconds_remaining % 60                                                                                    # Remaining seconds after full minutes are removed
+
+        self.rqi_batch_window_label.setText(f"{batch_start}  →  {batch_end}" if batch_start and batch_end else "Unavailable")
+        self.rqi_batch_countdown_label.setText(f"{minutes_remaining:02d}:{seconds_remainder:02d}")                                    # Live countdown until automatic batch rollover
+
+        current_csv_path = status.get("current_csv_path") or status.get("latest_csv_path") or ""
+        self.rqi_current_csv_label.setText(current_csv_path if current_csv_path else "No CSV created yet")
+
+        last_uploaded_local = status.get("last_uploaded_local_path", "")
+        self.rqi_last_uploaded_local_label.setText(last_uploaded_local if last_uploaded_local else "None yet")
+
+        last_uploaded_remote = status.get("last_uploaded_remote_path", "")
+        self.rqi_last_uploaded_remote_label.setText(last_uploaded_remote if last_uploaded_remote else "None yet")
+
+        last_upload_time = status.get("last_upload_time", "")
+        self.rqi_last_upload_time_label.setText(last_upload_time if last_upload_time else "None yet")
+
+        last_upload_error = status.get("last_upload_error", "")
+        self.rqi_last_upload_error_label.setText(last_upload_error if last_upload_error else "None")
+
+        if last_upload_error:
+            self.rqi_last_upload_error_label.setStyleSheet("color: #e64e30; font-weight: 700;")                                       # Show upload errors in red so failed SFTP attempts are obvious
+        else:
+            self.rqi_last_upload_error_label.setStyleSheet("color: #00bc8c;")                                                         # Show healthy state when no upload error is present
+
     def _start_timers(self):
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._update_status)                                                                        # Refresh status cards and labels
@@ -891,9 +1189,14 @@ class SettingsWindow(QMainWindow):
         self.log_timer.timeout.connect(self._update_logs)                                                                             # Refresh live log viewer
         self.log_timer.start(3000)                                                                                                    # Every 3 seconds
 
+        self.rqi_status_timer = QTimer(self)
+        self.rqi_status_timer.timeout.connect(self._update_rqi_csv_sftp_status)                                                       # Refresh current batch window countdown and last upload information
+        self.rqi_status_timer.start(1000)                                                                                             # Every 1 second so countdown feels live and responsive
+
         self._update_status()                                                                                                         # Initial status refresh on startup
         self._update_login_status()                                                                                                   # Initial login refresh on startup
         self._update_logs()                                                                                                           # Initial log refresh on startup
+        self._update_rqi_csv_sftp_status()                                                                                            # Initial CSV batch window / upload status refresh on startup
         self._update_pause_controls()                                                                                                 # Initial pause button/menu refresh on startup
 
     def _update_pause_controls(self):
@@ -1043,7 +1346,7 @@ class SettingsWindow(QMainWindow):
         self.aha_login_label.setText(text)                                                                                            # Update label on AHA tab
         self.aha_login_label.setStyleSheet(f"color: {color}; font-weight: 700;")
 
-        self.quick_login.setText(text)                                                                                                # Update quick label on overview tab
+        self.quick_login.setText(text)                                                                                                # Update quick label on csv_sftp tab
         self.quick_login.setStyleSheet(f"color: {color};")
 
         if aha_required:
@@ -1350,6 +1653,36 @@ class SettingsWindow(QMainWindow):
             
             QPushButton:hover {background-color: #3b82f6;}
     
+            QLabel#SectionTitle {
+                color: white;
+                font-size: 18px;
+                font-weight: 700;
+            }
+
+            QLabel#SectionSubtitle {
+                color: #bfc5d2;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            QPushButton#BrowseButton {
+                background-color: #3498db;
+                padding: 6px 12px;
+                min-width: 80px;
+            }
+            QPushButton#BrowseButton:hover {
+                background-color: #5dade2;
+            }
+
+            QPushButton#ActionButton {
+                background-color: #5865f2;
+                padding: 8px 14px;
+                min-width: 150px;
+            }
+            QPushButton#ActionButton:hover {
+                background-color: #6f7cff;
+            }               
+
             QFrame#MiniLogsPanel {
                 background-color: #2b2d31;
                 border: 1px solid #3b3d42;
@@ -1409,6 +1742,8 @@ _qt_window = None                                                               
 _qt_tray = None                                                                                                                       # Shared system tray icon instance
 
 def open_settings(on_toggle_pause_all=None, on_toggle_pause_email=None, on_toggle_pause_automation_loop=None,
+                  on_generate_rqi_csv=None, on_upload_rqi_csv=None, on_refresh_rqi_upload_window=None,
+                  get_rqi_csv_sftp_status=None, get_missing_sftp_fields=None,
                   on_quit=None, get_pause_states=None, on_ready=None,):
     
     global _qt_app, _qt_window, _qt_tray
@@ -1433,6 +1768,11 @@ def open_settings(on_toggle_pause_all=None, on_toggle_pause_email=None, on_toggl
         _qt_window = SettingsWindow(on_toggle_pause_all=on_toggle_pause_all,                                                          # Main window Pause All button
             on_toggle_pause_email=on_toggle_pause_email,                                                                              # Main window menu item for email_to_sheets
             on_toggle_pause_automation_loop=on_toggle_pause_automation_loop,                                                          # Main window menu item for automation loop
+            on_generate_rqi_csv=on_generate_rqi_csv,                                                                                  # RQI CSV & SFTP tab button for manual CSV batch generation
+            on_upload_rqi_csv=on_upload_rqi_csv,                                                                                      # RQI CSV & SFTP tab button for manual SFTP upload
+            on_refresh_rqi_upload_window=on_refresh_rqi_upload_window,                                                                # RQI CSV & SFTP tab button for starting a brand-new upload window immediately
+            get_rqi_csv_sftp_status=get_rqi_csv_sftp_status,                                                                          # RQI CSV & SFTP tab status callback for live batch window and last upload info
+            get_missing_sftp_fields=get_missing_sftp_fields,                                                                          # RQI CSV & SFTP tab validation callback for missing SFTP settings
             on_quit=on_quit, get_pause_states=get_pause_states, on_ready=on_ready,)                                                   # Create main window once
 
     if _qt_tray is None:
