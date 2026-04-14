@@ -33,7 +33,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "RQI_EmailSheets"))
 
 from Proper_MS.outlook_authentication import authenticate
-from Proper_MS.utils import resource_path
+from Proper_MS.utils import resource_path, update_aha_registration_status
 
 # --------------------------------------------------------------------
 # Environment Variables
@@ -677,6 +677,20 @@ def extract_appointment_fields(text: str) -> dict:
     return appointment
 
 
+def payment_completed(payment_text: str) -> bool:
+    value = (payment_text or "").strip().lower()
+    if not value:
+        return False
+
+    if value in {"no", "false", "unpaid", "pending", "failed", "declined", "0"}:
+        return False
+
+    if value in {"yes", "true", "paid", "completed", "success", "successful", "1"}:
+        return True
+
+    return any(token in value for token in ("paid", "complete", "success", "approved"))
+
+
 def parse_appointment_when(when_str: str):
     """
     Parse appointment 'When' field to extract ISO start/end datetimes.
@@ -1152,6 +1166,7 @@ def main():
 
         fields = extract_fields(body_text)
         logging.info("Extracted fields from msg %s: %s", msg_id, fields)
+        appointment = extract_appointment_fields(body_text)
 
         full_name = " ".join(filter(None, [
             fields.get("FirstName", ""),
@@ -1171,6 +1186,17 @@ def main():
             logging.error("Failed to append row to sheet: %s", e)
             print(f"✗ Failed to append row / subject: {subject} / from: {sender}")
             continue
+
+        trigger_email = (fields.get("Email") or "").strip()
+        if trigger_email and payment_completed(appointment.get("paid_online", "")):
+            try:
+                updated = update_aha_registration_status(trigger_email)
+                if updated:
+                    logging.info("Marked Acuity Registration as Yes for %s from the current payment email", trigger_email)
+                else:
+                    logging.info("No matching AHA row found for payment email %s", trigger_email)
+            except Exception as e:
+                logging.error("Failed to update AHA registration status for %s: %s", trigger_email, e)
 
         event_created = create_calendar_event(
             token=token,

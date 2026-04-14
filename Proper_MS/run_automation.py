@@ -3,7 +3,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from utils import resource_path, base_dir
+from utils import resource_path, base_dir, update_aha_registration_status
 from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
     expect,
@@ -43,6 +43,8 @@ PAUSE_AT_END = os.getenv("PAUSE_AT_END", "1").strip() == "1"  # 1 = keep browser
 PW_TIMEOUT_MS = int(os.getenv("PW_TIMEOUT_MS", "10000"))  # Playwright default timeout (ms)
 
 ADVANCE_INDEX_ON_NO_COURSES = os.getenv("ADVANCE_INDEX_ON_NO_COURSES", "1").strip() == "1"  # avoid re-running the same email forever
+
+REMINDER_EMAIL_DAYS = int(os.getenv("REMINDER_EMAIL_DAYS", "7"))  # days after adding student before sending reminder email
 
 
 def normalize_to_mmddyyyy(raw: str) -> str:
@@ -1119,6 +1121,7 @@ def process_all_courses_on_results_page(page, instructor_name: str, date_label: 
                 course_type=course_type,
                 before_emails=before_emails,
                 expected_new=accepted_count,
+                date=date_label,
             )
             append_rows_to_google_sheet_via_api(rows_tsv)
             stats["rows_appended"] += _count_tsv_rows(rows_tsv)
@@ -1362,13 +1365,14 @@ def _roster_pairs_snapshot(page):
         except Exception:
             return []
 
-def extract_new_students_rows_for_sheet(page, course_type: str, before_emails: set[str], expected_new: int = 0) -> str:
+def extract_new_students_rows_for_sheet(page, course_type: str, before_emails: set[str], expected_new: int = 0, date: str = "") -> str:
     """Build tsv rows (no header) for only newly accepted students.
     
     compare roster emails before vs after accepting, then emit only the new ones
-    Columns: Email | First | Middle | Last | Course
+    Columns: Email | First | Middle | Last | Course | Date | Acuity Registration | AHA Registration | Reminder Email
     """
     course = (course_type or "").strip()
+    date_norm = (date or "").strip()
     before_norm = {str(e).strip().lower() for e in (before_emails or set()) if str(e).strip()}
 
     # Wait for the roster table to reflect newly accepted students
@@ -1394,7 +1398,7 @@ def extract_new_students_rows_for_sheet(page, course_type: str, before_emails: s
     lines = []
     for email, name_phone in new_pairs:
         first, middle, last = parse_full_name(name_phone)
-        lines.append("\t".join([email.strip(), first, middle, last, course]))
+        lines.append("\t".join([email.strip(), first, middle, last, course, date_norm, "No", "Yes", ""]))
 
     tsv = "\n".join(lines)
 
@@ -1439,8 +1443,29 @@ def _get_gsheet_worksheet(worksheet_name: str | None = None):
     return ws
 
 
+def ensure_gsheet_headers(worksheet_name: str | None = None):
+    """Ensure the Google Sheet has the correct header row with all 9 columns."""
+    ws = _get_gsheet_worksheet(worksheet_name)
+    
+    # Check if sheet is empty (no headers yet)
+    try:
+        first_row = ws.row_values(1)
+        if first_row and any(first_row):
+            # Sheet already has content (assume headers exist)
+            return
+    except Exception:
+        pass
+    
+    # Add header row with all 9 columns
+    headers = ["Email", "First Name", "Middle Name", "Last Name", "Course", "Date", "Acuity Registration", "AHA Registration", "Reminder Email"]
+    ws.insert_row(headers, index=1, value_input_option="RAW")
+
+
 def append_rows_to_google_sheet_via_api(tsv_rows_only: str, worksheet_name: str | None = None):
     """Append TSV rows (no header) into Google Sheet (API client reused)."""
+    # Ensure headers exist first
+    ensure_gsheet_headers(worksheet_name)
+    
     rows = [ln for ln in (tsv_rows_only or "").splitlines() if ln.strip()]
     if not rows:
         return
@@ -1448,6 +1473,106 @@ def append_rows_to_google_sheet_via_api(tsv_rows_only: str, worksheet_name: str 
 
     ws = _get_gsheet_worksheet(worksheet_name)
     ws.append_rows(values, value_input_option="RAW")
+
+    # Keep the registration flags synchronized for any existing row that matches these emails.
+    for row in values:
+        email = (row[0] if row else "").strip()
+        if not email:
+            continue
+
+        try:
+            update_student_registration_status(email=email, worksheet_name=worksheet_name)
+        except Exception as e:
+            print(f"[GSHEET] Failed to update registration status for {email}: {e!r}", flush=True)
+
+
+def update_student_registration_status(email: str, worksheet_name: str | None = None, reminder_sent_date: str | None = None):
+    """Update a student's registration status when triggered.
+    
+    Updates columns for the given email:
+    - Acuity Registration (column 7) -> "Yes"
+    - AHA Registration (column 8) -> "Yes"
+    - Reminder Email (column 9) -> date string if provided, else blank
+    
+    Args:
+        email: Student's email address to find and update
+        worksheet_name: Optional worksheet name (defaults to Sheet1)
+        reminder_sent_date: Optional date string when reminder email was sent (e.g., "04/10/2026")
+                           If None, column remains blank
+    """
+    try:
+        return update_aha_registration_status(
+            email=email,
+            worksheet_name=worksheet_name,
+            reminder_sent_date=reminder_sent_date,
+        )
+    except Exception as e:
+        print(f"[GSHEET] Error updating student {email}: {e!r}", flush=True)
+        return False
+
+
+def check_and_populate_reminder_emails(worksheet_name: str | None = None):
+    """Check for students needing reminders and auto-populate Reminder Email column.
+    
+    Finds students where:
+    - Acuity Registration = "No"
+    - Reminder Email is blank
+    - Student was added >= REMINDER_EMAIL_DAYS ago
+    
+    Auto-populates Reminder Email with today's date for those students.
+    
+    Returns count of students updated.
+    """
+    from datetime import datetime, timedelta
+    
+    ws = _get_gsheet_worksheet(worksheet_name)
+    
+    try:
+        all_values = ws.get_all_values()
+        today_str = datetime.now().strftime("%m/%d/%Y")
+        cutoff_date = datetime.now() - timedelta(days=REMINDER_EMAIL_DAYS)
+        updated_count = 0
+        
+        for row_idx, row in enumerate(all_values, start=1):
+            if row_idx == 1:
+                # Skip header row
+                continue
+            
+            if not row or len(row) < 9:
+                continue
+            
+            email = (row[0] or "").strip()
+            date_str = (row[5] or "").strip()  # Column 6 (index 5) is Date
+            acuity_reg = (row[6] or "").strip().lower()  # Column 7 (index 6) is Acuity Registration
+            reminder_email = (row[8] or "").strip()  # Column 9 (index 8) is Reminder Email
+            
+            if not email:
+                continue
+            
+            # Check if this row needs a reminder
+            if acuity_reg != "no" or reminder_email:
+                # Skip if Acuity is not "No" or Reminder already populated
+                continue
+            
+            # Parse the date and check if it's old enough
+            try:
+                # Try to parse date in mm/dd/yyyy format
+                date_obj = datetime.strptime(date_str, "%m/%d/%Y")
+                if date_obj <= cutoff_date:
+                    # Student is old enough, populate reminder date
+                    ws.update_cell(row_idx, 9, today_str, value_input_option="RAW")
+                    updated_count += 1
+                    print(f"[REMINDER] Populated reminder for {email} (added {date_str})", flush=True)
+            except ValueError:
+                # Skip rows with invalid date format
+                continue
+        
+        print(f"[REMINDER] Updated {updated_count} students with reminder dates", flush=True)
+        return updated_count
+    
+    except Exception as e:
+        print(f"[GSHEET] Error checking reminders: {e!r}", flush=True)
+        return 0
 
 def run_demo(name, date, headless: bool = False):
     # remove previous screenshots in shots/

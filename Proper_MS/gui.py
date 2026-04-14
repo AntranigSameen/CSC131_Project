@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, QTimer, QSize, QRect, QPropertyAnimation, QEasing
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
-                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog,)
+                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QSlider,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 
@@ -49,7 +49,12 @@ def save_settings(entries, restart=False):
     restart_needed = False                                                                                                            # Track whether any changed setting needs restart
 
     for key, widget in entries.items():
-        new_value = widget.text()                                                                                                     # Value currently entered in GUI
+        # Handle both QLineEdit (text()) and QSpinBox (value())
+        if isinstance(widget, QSpinBox):
+            new_value = str(widget.value())
+        else:
+            new_value = widget.text()                                                                                                 # Value currently entered in GUI
+        
         old_value = os.getenv(key, "")                                                                                                # Existing loaded env value
 
         if new_value != old_value and key in RESTART_REQUIRED:
@@ -962,6 +967,14 @@ class SettingsWindow(QMainWindow):
             edit = QLineEdit(os.getenv(key, ""))                                                                                      # Pre-fill each field from current .env
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             form.addRow(label, edit)
+
+        # Add Reminder Email Days spinbox
+        reminder_days_spinbox = QSpinBox()
+        reminder_days_spinbox.setMinimum(1)
+        reminder_days_spinbox.setMaximum(365)
+        reminder_days_spinbox.setValue(int(os.getenv("REMINDER_EMAIL_DAYS", "7")))
+        self.entries["REMINDER_EMAIL_DAYS"] = reminder_days_spinbox
+        form.addRow("Reminder Email Days", reminder_days_spinbox)
 
         self._add_sidebar_page(ScrollablePage(page), "Sheets", "📄")                                                                 # Add Sheets page to sidebar navigation
 
