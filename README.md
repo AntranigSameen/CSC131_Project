@@ -144,7 +144,7 @@ Place your Google service account JSON files in the project root:
 
 2. **Launch the application:**
    ```bash
-   python Proper_MS/master_control.py
+   pyinstaller master_control.spec --clean
    ```
 
 The GUI window will open with:
