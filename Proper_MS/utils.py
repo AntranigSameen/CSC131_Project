@@ -7,11 +7,6 @@ import os
 import shutil
 from dotenv import load_dotenv
 
-
-_AHA_GS_CLIENT = None
-_AHA_GS_SPREADSHEET = None
-_AHA_GS_WORKSHEETS = {}
-
 #=======
 # LOGIC
 #=======
@@ -101,113 +96,22 @@ def log_file():
     return os.path.join(logs_dir(), "app.log")
 
 
-def _get_aha_sheet_url():
-    load_dotenv(env_file(), override=True)
-    return os.getenv("GOOGLE_SHEET_URL", "").strip()
+def update_aha_registration_status(
+    email,
+    worksheet_name=None,
+    reminder_sent_date=None,
+    registration_date=None,
+    first_name=None,
+    last_name=None,
+):
+    # Backward-compatible wrapper; implementation lives in Proper_MS/acuity_registration.py.
+    from Proper_MS.acuity_registration import update_aha_registration_status as _impl
 
-
-def _get_aha_service_account_path():
-    load_dotenv(env_file(), override=True)
-    return resource_path(os.getenv("SERVICE_ACCOUNT_AHA_JSON", "google_sheet_api_key.json"))
-
-
-def _get_aha_registration_worksheet_name():
-    load_dotenv(env_file(), override=True)
-    return os.getenv("AHA_REGISTRATION_WORKSHEET", "").strip()
-
-
-def _normalize_header(value):
-    return "".join(ch for ch in (value or "").lower() if ch.isalnum())
-
-
-def _find_aha_registration_worksheet(spreadsheet):
-    configured_name = _get_aha_registration_worksheet_name()
-    if configured_name:
-        try:
-            return spreadsheet.worksheet(configured_name)
-        except Exception:
-            pass
-
-    for ws in spreadsheet.worksheets():
-        try:
-            headers = ws.row_values(1)
-        except Exception:
-            continue
-
-        normalized = {_normalize_header(h) for h in headers}
-        has_email = "email" in normalized
-        has_acuity = "acuityregistration" in normalized
-        has_aha = "aharegistration" in normalized
-
-        if has_email and has_acuity and has_aha:
-            return ws
-
-    return spreadsheet.sheet1
-
-
-def _get_aha_gsheet_worksheet(worksheet_name=None):
-    global _AHA_GS_CLIENT, _AHA_GS_SPREADSHEET, _AHA_GS_WORKSHEETS
-
-    try:
-        import gspread
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError("Missing dependency 'gspread'. Install with: pip install gspread google-auth") from e
-
-    sheet_url = _get_aha_sheet_url()
-    if not sheet_url:
-        raise RuntimeError("Missing GOOGLE_SHEET_URL for AHA registration updates.")
-
-    key_path = _get_aha_service_account_path()
-
-    if _AHA_GS_CLIENT is None:
-        _AHA_GS_CLIENT = gspread.service_account(filename=key_path)
-
-    if _AHA_GS_SPREADSHEET is None:
-        _AHA_GS_SPREADSHEET = _AHA_GS_CLIENT.open_by_url(sheet_url)
-
-    cache_key = (worksheet_name or "").strip() or "__aha_registration__"
-    if cache_key in _AHA_GS_WORKSHEETS:
-        return _AHA_GS_WORKSHEETS[cache_key]
-
-    if worksheet_name:
-        worksheet = _AHA_GS_SPREADSHEET.worksheet(worksheet_name)
-    else:
-        worksheet = _find_aha_registration_worksheet(_AHA_GS_SPREADSHEET)
-
-    _AHA_GS_WORKSHEETS[cache_key] = worksheet
-    return worksheet
-
-
-def update_aha_registration_status(email, worksheet_name=None, reminder_sent_date=None):
-    ws = _get_aha_gsheet_worksheet(worksheet_name)
-
-    email_norm = (email or "").strip().lower()
-    if not email_norm:
-        return False
-
-    headers = ws.row_values(1)
-    header_index = {_normalize_header(h): idx + 1 for idx, h in enumerate(headers)}
-
-    email_col = header_index.get("email", 1)
-    acuity_col = header_index.get("acuityregistration", 7)
-    aha_col = header_index.get("aharegistration", 8)
-    reminder_col = header_index.get("reminderemail", 9)
-
-    all_values = ws.get_all_values()
-    for row_idx, row in enumerate(all_values, start=1):
-        if row_idx == 1:
-            continue
-
-        if not row:
-            continue
-
-        row_email = (row[email_col - 1] if len(row) >= email_col else "").strip().lower()
-        if row_email != email_norm:
-            continue
-
-        ws.update_cell(row_idx, acuity_col, "Yes", value_input_option="RAW")
-        ws.update_cell(row_idx, aha_col, "Yes", value_input_option="RAW")
-        ws.update_cell(row_idx, reminder_col, (reminder_sent_date or "").strip(), value_input_option="RAW")
-        return True
-
-    return False
+    return _impl(
+        email=email,
+        worksheet_name=worksheet_name,
+        reminder_sent_date=reminder_sent_date,
+        registration_date=registration_date,
+        first_name=first_name,
+        last_name=last_name,
+    )

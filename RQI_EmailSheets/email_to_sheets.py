@@ -19,6 +19,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+from dotenv import set_key
 
 # Third-party imports
 import requests  # For making HTTP requests to Microsoft Graph API
@@ -33,7 +34,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "RQI_EmailSheets"))
 
 from Proper_MS.outlook_authentication import authenticate
-from Proper_MS.utils import resource_path, update_aha_registration_status
+from Proper_MS.utils import resource_path, writable_env_file
+from Proper_MS.acuity_registration import update_aha_registration_status
 
 # --------------------------------------------------------------------
 # Environment Variables
@@ -447,6 +449,67 @@ def _compact_label(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (value or "").lower())
 
 
+def _env_key_for_label(prefix: str, label: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9]+", "_", (label or "").strip().upper()).strip("_")
+    return f"{prefix}{clean}" if clean else prefix.rstrip("_")
+
+
+def _truncate_env_value(value: str, max_len: int = 1000) -> str:
+    text = (value or "").strip()
+    if len(text) <= max_len:
+        return text
+    return text[:max_len]
+
+
+def persist_email_snapshot_to_env(
+    fields: Dict[str, str],
+    appointment: Dict[str, str],
+    subject: str,
+    sender: str,
+    received_dt: str,
+    body_text: str,
+) -> None:
+    """Persist the latest extracted email payload into the writable .env file."""
+    env_path = writable_env_file()
+
+    payload: Dict[str, str] = {
+        "LAST_EMAIL_SUBJECT": subject or "",
+        "LAST_EMAIL_SENDER": sender or "",
+        "LAST_EMAIL_RECEIVED_DATETIME": received_dt or "",
+        "LAST_EMAIL_BODY": _truncate_env_value(strip_html_tags(body_text or "")),
+    }
+
+    for key, value in (fields or {}).items():
+        payload[_env_key_for_label("LAST_EMAIL_FIELD_", key)] = value or ""
+
+    for key, value in (appointment or {}).items():
+        payload[_env_key_for_label("LAST_EMAIL_APPOINTMENT_", key)] = value or ""
+
+    for key, value in payload.items():
+        set_key(env_path, key, str(value or ""))
+        os.environ[key] = str(value or "")
+
+
+def extract_mmddyyyy_for_aha_date(appointment_when: str, fallback: str = "") -> str:
+    """Best-effort date normalization to mm/dd/yyyy for AHA sheet date updates."""
+    date_times = parse_appointment_when(appointment_when or "")
+    if date_times and date_times[0]:
+        try:
+            return datetime.fromisoformat(date_times[0]).strftime("%m/%d/%Y")
+        except Exception:
+            pass
+
+    fallback_value = (fallback or "").strip()
+    if fallback_value:
+        for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(fallback_value, fmt).strftime("%m/%d/%Y")
+            except ValueError:
+                continue
+
+    return datetime.now().strftime("%m/%d/%Y")
+
+
 DEFAULT_HEADERS = [
     "LocationID",
     "LocationName",
@@ -475,6 +538,119 @@ def build_row_from_headers(fields: Dict[str, str], headers: List[str]) -> List[s
     for header in headers:
         row.append(normalized_fields.get(_compact_label(header), ""))
     return row
+
+
+def _sanitize_cell_value(value: str, max_len: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").replace("\xa0", " ")).strip()
+    if len(text) > max_len:
+        return text[:max_len]
+    return text
+
+
+def _sanitize_fields(fields: Dict[str, str]) -> Dict[str, str]:
+    return {k: _sanitize_cell_value(v) for k, v in (fields or {}).items()}
+
+
+def _looks_like_appointment_payload(fields: Dict[str, str], appointment: Dict[str, str]) -> bool:
+    appointment_keys = (
+        "for_name", "what", "when", "where", "price", "paid_online",
+        "street_address_1", "street_address_2", "city", "state", "zip",
+    )
+    lead_keys = (
+        "LocationID", "LocationName", "FirstName", "LastName",
+        "JobCode", "JobName", "HireDate", "Status", "DateOfBirth",
+    )
+
+    appointment_signals = sum(1 for key in appointment_keys if (appointment or {}).get(key))
+    lead_signals = sum(1 for key in lead_keys if (fields or {}).get(key))
+    # True appointment payload: significant appointment data + minimal lead data. 
+    # Email-only rows (0 appointment + 0 lead) should NOT be flagged as appointment.
+    return appointment_signals >= 3 and lead_signals == 0
+
+
+def should_append_lead_row(fields: Dict[str, str], appointment: Dict[str, str]) -> Tuple[bool, str]:
+    # Intentionally no gate: map whatever was extracted into sheet columns.
+    # Keep this helper for compatibility with existing call sites.
+    return True, "ok"
+
+
+def has_rqi_label_signature(text: str) -> bool:
+    """Return True only when message text includes key RQI labels."""
+    clean = strip_html_tags(text or "")
+    if not clean:
+        return False
+
+    patterns = (
+        r"\blocation\s*id\s*:",
+        r"\bjob\s*code\s*:",
+    )
+    lowered = clean.lower()
+    return any(re.search(pattern, lowered) for pattern in patterns)
+
+
+def _is_valid_email(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", (value or "").strip(), re.IGNORECASE))
+
+
+def _row_looks_corrupt(headers: List[str], row: List[str]) -> bool:
+    if not row:
+        return False
+
+    header_index = {_compact_label(h): i for i, h in enumerate(headers or [])}
+    email_idx = header_index.get("email", 6)
+    user_idx = header_index.get("userid", 2)
+
+    email_value = (row[email_idx] if email_idx < len(row) else "").strip()
+    user_value = (row[user_idx] if user_idx < len(row) else "").strip()
+    joined = " ".join((cell or "") for cell in row).lower()
+
+    noisy_tokens = (
+        "street address line 1",
+        "street address line 2",
+        "cancellation/rescheduling",
+        "paid online",
+        "price:",
+        "location =",
+        "address =",
+    )
+    has_noise = any(token in joined for token in noisy_tokens)
+
+    invalid_email_blob = bool(email_value) and (not _is_valid_email(email_value)) and ("@" in email_value)
+    invalid_user_blob = bool(user_value) and (not _is_valid_email(user_value)) and ("@" in user_value)
+
+    oversized_cell = any(len((cell or "").strip()) > 160 for cell in row)
+
+    return has_noise and (invalid_email_blob or invalid_user_blob or oversized_cell)
+
+
+def cleanup_corrupt_rows(ws, headers: List[str]) -> int:
+    """Delete obviously malformed rows left by earlier parser bugs."""
+    if os.getenv("RQI_CLEAN_CORRUPT_ROWS", "1").strip() == "0":
+        return 0
+
+    try:
+        all_values = ws.get_all_values()
+    except Exception as e:
+        logging.warning("Could not load worksheet rows for cleanup: %s", e)
+        return 0
+
+    if len(all_values) <= 1:
+        return 0
+
+    to_delete: List[int] = []
+    for row_idx, row in enumerate(all_values[1:], start=2):
+        if _row_looks_corrupt(headers, row):
+            to_delete.append(row_idx)
+
+    deleted = 0
+    for row_idx in reversed(to_delete):
+        try:
+            ws.delete_rows(row_idx)
+            deleted += 1
+        except Exception as e:
+            logging.warning("Failed deleting corrupt row %s: %s", row_idx, e)
+
+    return deleted
 
 
 def _label_to_pattern(label: str) -> str:
@@ -526,6 +702,51 @@ def _extract_values_by_known_labels(
         value = re.sub(r"\s+", " ", clean_text[start:end]).strip(" \t\n,;")
         extracted[canonical_key] = value
 
+    # Try multi-line format for any missing values (Label on one line, Value on next)
+    lines = clean_text.split("\n")
+    for i, line in enumerate(lines):
+        line_clean = re.sub(r"\s+", " ", line).strip()
+        if not line_clean or ":" in line_clean:
+            continue
+        
+        # Check if this line matches any of our expected labels
+        normalized = _compact_label(line_clean)
+        for key in label_aliases:
+            if extracted.get(key):  # Skip if already extracted
+                continue
+            # Check if this line matches any of the aliases for this key
+            for alias in label_aliases[key]:
+                if _compact_label(alias) == normalized:
+                    # Get the next non-empty line as the value
+                    for j in range(i + 1, len(lines)):
+                        next_line = re.sub(r"\s+", " ", lines[j]).strip()
+                        if next_line and ":" not in next_line:
+                            extracted[key] = next_line
+                            break
+                        elif ":" in next_line:
+                            # Hit another label with colon format, stop
+                            break
+                    break
+
+    # Try same-line format without colon (e.g., "for Kaleigh Henson" on one line)
+    # This handles email format where label and value are on same line without colon separator
+    for line in lines:
+        line_clean = re.sub(r"\s+", " ", line).strip()
+        if not line_clean or ":" in line_clean:
+            continue
+        
+        # Try to match label at start of line followed by space and value
+        for key, aliases in label_aliases.items():
+            if extracted.get(key):  # Skip if already extracted
+                continue
+            for alias in aliases:
+                # Create a pattern that matches the alias at the start of the line, followed by space(s) and captures the rest
+                pattern = rf"^{re.escape(alias)}\s+(.+)$"
+                match = re.match(pattern, line_clean, re.IGNORECASE)
+                if match:
+                    extracted[key] = match.group(1)
+                    break
+
     return extracted
 
 
@@ -551,12 +772,46 @@ def _iter_labeled_lines(text: str):
 def extract_labeled_field(text: str, *labels: str) -> str:
     """
     Extract a field value that follows a label pattern like "Label: Value".
+    Also handles multi-line format where label is on one line and value on next.
+    Also handles same-line format without colon (e.g., "for Kaleigh Henson").
     Accepts multiple label aliases such as "FirstName" and "First Name".
     """
     expected = {_compact_label(label) for label in labels if label}
+    
+    # Try colon format first (Label: Value)
     for normalized_label, value in _iter_labeled_lines(text):
         if normalized_label in expected and value:
             return value
+    
+    # Try multi-line format and same-line format without colon
+    clean = strip_html_tags(text or "")
+    clean = clean.replace("\xa0", " ").replace("\r", "\n")
+    lines = clean.split("\n")
+    
+    for i, line in enumerate(lines):
+        line_clean = re.sub(r"\s+", " ", line).strip()
+        if not line_clean:
+            continue
+        
+        # Try same-line format without colon (Label Value on same line)
+        for label in labels:
+            pattern = rf"^{re.escape(label)}\s+(.+)$"
+            match = re.match(pattern, line_clean, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        # Check if this line matches any of our expected labels (for multi-line format)
+        normalized = _compact_label(line_clean)
+        if normalized in expected:
+            # Get the next non-empty line as the value
+            for j in range(i + 1, len(lines)):
+                next_line = re.sub(r"\s+", " ", lines[j]).strip()
+                if next_line and ":" not in next_line:  # Don't grab lines with colons (different labels)
+                    return next_line
+                elif ":" in next_line:
+                    # Hit another label with colon format, stop
+                    break
+    
     return ""
 
 
@@ -591,9 +846,37 @@ def extract_fields(text: str) -> dict:
             "InactiveDate": ["InactiveDate", "Inactive Date"],
             "Group": ["Group"],
         },
+        stop_labels=[
+            "For",
+            "What",
+            "When",
+            "Where",
+            "Phone",
+            "Price",
+            "Paid Online",
+            "Street Address Line 1",
+            "Street Address Line 2",
+            "City",
+            "State",
+            "ZIP",
+            "Cancellation/Rescheduling info",
+        ],
     )
 
-    if not fields["Email"]:
+    # If FirstName and LastName aren't available, try to extract from "For" field
+    if not (fields.get("FirstName") or "").strip() and not (fields.get("LastName") or "").strip():
+        name_value = extract_labeled_field(text, "For")
+        if name_value:
+            parts = name_value.split(maxsplit=1)
+            fields["FirstName"] = parts[0]
+            if len(parts) > 1:
+                fields["LastName"] = parts[1]
+
+    # Normalize noisy captures like "user@email.com Price: $100.00 ..." to just the email token.
+    email_in_field = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", fields.get("Email", ""), re.I)
+    if email_in_field:
+        fields["Email"] = email_in_field.group(0)
+    else:
         m = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", clean, re.I)
         if m:
             fields["Email"] = m.group(0)
@@ -1128,6 +1411,10 @@ def main():
         sheet_headers = DEFAULT_HEADERS
     logging.info("Using worksheet headers for mapping: %s", sheet_headers)
 
+    removed_rows = cleanup_corrupt_rows(ws, sheet_headers)
+    if removed_rows:
+        logging.info("Removed %d previously corrupted row(s) from worksheet.", removed_rows)
+
     maybe_roll_batch_window(sheet_headers)                                                                                            # Ensure the current CSV batch exists before processing any unread emails
 
     token = authenticate()
@@ -1159,14 +1446,96 @@ def main():
         msg_id = msg.get("id")
         subject = msg.get("subject") or ""
         sender = message_sender_address(msg)
+        received_dt = msg.get("receivedDateTime") or ""
 
         body_text = get_message_body(token, msg_id) if msg_id else ""
         if not body_text:
             body_text = msg.get("bodyPreview") or ""
 
-        fields = extract_fields(body_text)
+        fields = _sanitize_fields(extract_fields(body_text))
         logging.info("Extracted fields from msg %s: %s", msg_id, fields)
+        logging.debug("Raw email body (first 500 chars): %s", body_text[:500] if body_text else "(empty)")
+        non_empty_fields = {k: v for k, v in fields.items() if v}
+        logging.info("Non-empty extracted fields: %s", non_empty_fields)
         appointment = extract_appointment_fields(body_text)
+
+        # Process all emails including Acuity appointment emails for RQI sheet data extraction
+        if not (fields.get("FirstName") or "").strip() and not (fields.get("LastName") or "").strip():
+            appointment_name = (appointment.get("for_name") or "").strip()
+            # If appointment extraction didn't get the name, try direct extraction from email text
+            if not appointment_name:
+                appointment_name = extract_labeled_field(body_text, "For")
+            if appointment_name:
+                parts = appointment_name.split(maxsplit=1)
+                fields["FirstName"] = parts[0]
+                if len(parts) > 1:
+                    fields["LastName"] = parts[1]
+                logging.info("Applied name fallback from appointment field for msg %s: %s", msg_id, appointment_name)
+
+        # LocationName always comes from appointment "What" text.
+        # Example: "Online BLS ... (CPR Lifeline, Nashville, Film House)" -> "Film House"
+        appointment_what = (appointment.get("what") or "").strip()
+        # If appointment extraction didn't get What, try direct extraction from email text
+        if not appointment_what:
+            appointment_what = extract_labeled_field(body_text, "What")
+        if appointment_what:
+            location_candidate = ""
+            group_course = ""
+
+            # Derive course level from "What" text.
+            # Example: "Online BLS with Skills Check (...)" -> "BLS"
+            course_match = re.search(r"\bonline\s+(.+?)(?:\s+with\b|\s*\(|$)", appointment_what, re.IGNORECASE)
+            if course_match:
+                course_raw = course_match.group(1).strip()
+                if course_raw:
+                    # Keep concise, stable token for Group label (first token, usually BLS/ACLS/PALS)
+                    group_course = re.sub(r"[^A-Za-z0-9+/\- ]", "", course_raw).strip().split()[0] if course_raw.split() else ""
+
+            trailing_paren_match = re.search(r"\(([^()]*)\)\s*$", appointment_what)
+            if trailing_paren_match:
+                inside_parens = trailing_paren_match.group(1).strip()
+                if "," in inside_parens:
+                    segments = [seg.strip() for seg in inside_parens.split(",") if seg.strip()]
+                    if segments:
+                        location_candidate = segments[-1]
+
+            if not location_candidate and "," in appointment_what:
+                segments = [seg.strip() for seg in appointment_what.split(",") if seg.strip()]
+                if segments:
+                    location_candidate = segments[-1]
+
+            if location_candidate:
+                fields["LocationName"] = location_candidate
+                logging.info(
+                    "Set LocationName from appointment What field for msg %s: %s",
+                    msg_id,
+                    location_candidate,
+                )
+
+            if group_course:
+                fields["Group"] = f"HeartCode {group_course} Online - 2025"
+                logging.info(
+                    "Set Group from appointment What field for msg %s: %s",
+                    msg_id,
+                    fields["Group"],
+                )
+
+        # Ensure Status is populated for rows appended from processed emails.
+        if not (fields.get("Status") or "").strip():
+            fields["Status"] = "Active"
+            logging.info("Set default Status=Active for msg %s", msg_id)
+
+        try:
+            persist_email_snapshot_to_env(
+                fields=fields,
+                appointment=appointment,
+                subject=subject,
+                sender=sender,
+                received_dt=received_dt,
+                body_text=body_text,
+            )
+        except Exception as e:
+            logging.warning("Failed to persist extracted email snapshot to .env: %s", e)
 
         full_name = " ".join(filter(None, [
             fields.get("FirstName", ""),
@@ -1188,15 +1557,45 @@ def main():
             continue
 
         trigger_email = (fields.get("Email") or "").strip()
-        if trigger_email and payment_completed(appointment.get("paid_online", "")):
+        trigger_first_name = (fields.get("FirstName") or "").strip()
+        trigger_last_name = (fields.get("LastName") or "").strip()
+        if trigger_email or (trigger_first_name and trigger_last_name):
+            registration_date = extract_mmddyyyy_for_aha_date(
+                appointment_when=appointment.get("when", ""),
+                fallback=fields.get("HireDate", ""),
+            )
             try:
-                updated = update_aha_registration_status(trigger_email)
+                updated = update_aha_registration_status(
+                    trigger_email,
+                    registration_date=registration_date,
+                    first_name=trigger_first_name,
+                    last_name=trigger_last_name,
+                )
                 if updated:
-                    logging.info("Marked Acuity Registration as Yes for %s from the current payment email", trigger_email)
+                    logging.info(
+                        "Updated AHA registration row (No->Yes when applicable), date=%s for email=%s name=%s %s",
+                        registration_date,
+                        trigger_email,
+                        trigger_first_name,
+                        trigger_last_name,
+                    )
                 else:
-                    logging.info("No matching AHA row found for payment email %s", trigger_email)
+                    logging.info(
+                        "AHA registration update found no matching No->Yes change for email=%s name=%s %s",
+                        trigger_email,
+                        trigger_first_name,
+                        trigger_last_name,
+                    )
             except Exception as e:
-                logging.error("Failed to update AHA registration status for %s: %s", trigger_email, e)
+                logging.error(
+                    "Failed to update AHA registration status for email=%s name=%s %s: %s",
+                    trigger_email,
+                    trigger_first_name,
+                    trigger_last_name,
+                    e,
+                )
+        else:
+            logging.info("Skipping AHA registration update because no email/name could be extracted for subject: %s", subject)
 
         event_created = create_calendar_event(
             token=token,

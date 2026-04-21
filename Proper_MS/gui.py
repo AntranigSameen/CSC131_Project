@@ -968,13 +968,21 @@ class SettingsWindow(QMainWindow):
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             form.addRow(label, edit)
 
-        # Add Reminder Email Days spinbox
-        reminder_days_spinbox = QSpinBox()
-        reminder_days_spinbox.setMinimum(1)
-        reminder_days_spinbox.setMaximum(365)
-        reminder_days_spinbox.setValue(int(os.getenv("REMINDER_EMAIL_DAYS", "7")))
-        self.entries["REMINDER_EMAIL_DAYS"] = reminder_days_spinbox
-        form.addRow("Reminder Email Days", reminder_days_spinbox)
+        # Reminder cadence for non-registered Acuity users (x days)
+        not_registered_days = QSpinBox()
+        not_registered_days.setMinimum(1)
+        not_registered_days.setMaximum(3650)
+        not_registered_days.setValue(int(os.getenv("ACUITY_NOT_REGISTERED_REMINDER_DAYS", os.getenv("REMINDER_EMAIL_DAYS", "7"))))
+        self.entries["ACUITY_NOT_REGISTERED_REMINDER_DAYS"] = not_registered_days
+        form.addRow("Not Registered Reminder (Days)", not_registered_days)
+
+        # Reminder cadence for registered Acuity users (y years)
+        registered_years = QSpinBox()
+        registered_years.setMinimum(1)
+        registered_years.setMaximum(25)
+        registered_years.setValue(int(os.getenv("ACUITY_REGISTERED_REMINDER_YEARS", "1")))
+        self.entries["ACUITY_REGISTERED_REMINDER_YEARS"] = registered_years
+        form.addRow("Registered Reminder (Years)", registered_years)
 
         self._add_sidebar_page(ScrollablePage(page), "Sheets", "📄")                                                                 # Add Sheets page to sidebar navigation
 

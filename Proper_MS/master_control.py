@@ -36,7 +36,7 @@ from gui import open_settings, prompt_for_aha_credentials
 from setup_login import aha_login_check
 from outlook_authentication import authenticate
 from run_helper import run_cycle
-from run_automation import run_demo
+from run_automation import run_demo, process_due_reminder_emails
 
 from RQI_EmailSheets.email_to_sheets import (run_forever as email_to_sheets_worker,
                                              generate_csv_now, upload_latest_csv_now, refresh_upload_window,
@@ -375,6 +375,18 @@ def automation_loop():
                 logging.exception("Error queuing automation cycle: %s", e)
         else:
             logging.info("No new emails to process in this cycle.")                                                                  # Nothing valid returned from run_cycle
+
+        try:
+            reminder_stats = process_due_reminder_emails(token)
+            if reminder_stats.get("sent", 0) > 0:
+                logging.info(
+                    "Reminder cycle sent=%d considered=%d errors=%d",
+                    reminder_stats.get("sent", 0),
+                    reminder_stats.get("considered", 0),
+                    reminder_stats.get("errors", 0),
+                )
+        except Exception as e:
+            logging.exception("Reminder cycle failed: %s", e)
 
         logging.info("Cycle complete. Waiting %d seconds for next cycle...", interval)
         time.sleep(interval)                                                                                                         # Wait before next email parsing cycle

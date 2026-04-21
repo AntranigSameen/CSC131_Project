@@ -2,8 +2,10 @@ import os
 import re
 import sys
 import time
+import requests
 from pathlib import Path
 from utils import resource_path, base_dir, update_aha_registration_status
+from datetime import datetime, timedelta
 from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
     expect,
@@ -235,8 +237,6 @@ def pull_next_unprocessed_instructor_and_date_from_extracted_data_file(
 
     return None
 
-
-from datetime import datetime
 
 def clean_shots_folder():
     """Delete old files under shots...so each run starts clean."""
@@ -1004,6 +1004,21 @@ def _count_tsv_rows(tsv_rows_only: str) -> int:
     return len(lines)
 
 
+def _is_target_closed_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "target page" in text and "has been closed" in text
+
+
+def _safe_update_cell(ws, row_idx: int, col_idx: int, value):
+    """Use RAW updates when possible but stay compatible with older gspread."""
+    try:
+        ws.update_cell(row_idx, col_idx, value, value_input_option="RAW")
+    except TypeError as e:
+        if "value_input_option" not in str(e):
+            raise
+        ws.update_cell(row_idx, col_idx, value)
+
+
 
 
 def _ensure_rows_for_index(page, target_row_index: int, timeout_ms: int = 12000) -> int:
@@ -1024,9 +1039,14 @@ def _ensure_rows_for_index(page, target_row_index: int, timeout_ms: int = 12000)
     stable_ticks = 0
 
     while time.time() < deadline:
+        if page.is_closed():
+            return 0
+
         try:
             n = page.locator("table tbody tr").count()
-        except Exception:
+        except Exception as e:
+            if _is_target_closed_error(e):
+                return 0
             n = 0
 
         if n > target_row_index:
@@ -1045,7 +1065,12 @@ def _ensure_rows_for_index(page, target_row_index: int, timeout_ms: int = 12000)
             except Exception:
                 pass
 
-        page.wait_for_timeout(200 if stable_ticks < 8 else 350)
+        try:
+            page.wait_for_timeout(200 if stable_ticks < 8 else 350)
+        except Exception as e:
+            if _is_target_closed_error(e):
+                return 0
+            raise
 
     try:
         return page.locator("table tbody tr").count()
@@ -1511,6 +1536,162 @@ def update_student_registration_status(email: str, worksheet_name: str | None = 
         return False
 
 
+def _is_truthy_yes(value: str) -> bool:
+    return (value or "").strip().lower() in {"yes", "y", "true", "1"}
+
+
+def _parse_sheet_date(raw: str) -> datetime | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _normalize_header(value: str) -> str:
+    return "".join(ch for ch in (value or "").lower() if ch.isalnum())
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = (os.getenv(name, str(default)) or "").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return max(1, int(default))
+
+
+def _add_years(start: datetime, years: int) -> datetime:
+    try:
+        return start.replace(year=start.year + years)
+    except ValueError:
+        # Handle Feb 29 on non-leap years.
+        return start.replace(month=2, day=28, year=start.year + years)
+
+
+def _send_graph_reminder_email(token: str, recipient_email: str, subject: str, body_text: str) -> bool:
+    url = "https://graph.microsoft.com/v1.0/me/sendMail"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": body_text},
+            "toRecipients": [{"emailAddress": {"address": recipient_email}}],
+        },
+        "saveToSentItems": True,
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=20)
+    except Exception as e:
+        print(f"[REMINDER] Failed sending email to {recipient_email}: {e!r}", flush=True)
+        return False
+
+    if response.status_code == 202:
+        return True
+
+    print(
+        f"[REMINDER] Graph sendMail failed for {recipient_email}: "
+        f"status={response.status_code}, body={response.text[:500]!r}",
+        flush=True,
+    )
+    return False
+
+
+def process_due_reminder_emails(token: str, worksheet_name: str | None = None):
+    """Send reminder emails based on Acuity registration status and configured cadence.
+
+    Cadence is environment-driven:
+    - ACUITY_NOT_REGISTERED_REMINDER_DAYS: for Acuity Registration != Yes
+    - ACUITY_REGISTERED_REMINDER_YEARS: for Acuity Registration == Yes
+
+    Returns a small stats dictionary for logging.
+    """
+    if not token:
+        return {"sent": 0, "considered": 0, "errors": 0}
+
+    days_interval = _positive_int_env("ACUITY_NOT_REGISTERED_REMINDER_DAYS", REMINDER_EMAIL_DAYS)
+    years_interval = _positive_int_env("ACUITY_REGISTERED_REMINDER_YEARS", 1)
+
+    ws = _get_gsheet_worksheet(worksheet_name)
+    all_values = ws.get_all_values()
+    if not all_values:
+        return {"sent": 0, "considered": 0, "errors": 0}
+
+    headers = all_values[0]
+    header_index = {_normalize_header(h): idx + 1 for idx, h in enumerate(headers)}
+
+    email_col = header_index.get("email", 1)
+    first_col = header_index.get("firstname", 2)
+    date_col = header_index.get("date", 6)
+    acuity_col = header_index.get("acuityregistration", 7)
+    reminder_col = header_index.get("reminderemail", 9)
+
+    now = datetime.now()
+    today_str = now.strftime("%m/%d/%Y")
+    stats = {"sent": 0, "considered": 0, "errors": 0}
+
+    for row_idx, row in enumerate(all_values, start=1):
+        if row_idx == 1 or not row:
+            continue
+
+        email = (row[email_col - 1] if len(row) >= email_col else "").strip()
+        if not email or "@" not in email:
+            continue
+
+        first_name = (row[first_col - 1] if len(row) >= first_col else "").strip()
+        date_raw = (row[date_col - 1] if len(row) >= date_col else "").strip()
+        acuity_value = (row[acuity_col - 1] if len(row) >= acuity_col else "").strip()
+        reminder_raw = (row[reminder_col - 1] if len(row) >= reminder_col else "").strip()
+
+        acuity_registered = _is_truthy_yes(acuity_value)
+        baseline = _parse_sheet_date(reminder_raw) or _parse_sheet_date(date_raw)
+        if baseline is None:
+            continue
+
+        if acuity_registered:
+            due_date = _add_years(baseline, years_interval)
+            subject = "Acuity Registration Renewal Reminder"
+            body = (
+                f"Hello {first_name or 'there'},\n\n"
+                f"This is a reminder that your Acuity registration is active. "
+                f"Please review and renew any required registration steps.\n\n"
+                f"This reminder is sent every {years_interval} year(s)."
+            )
+        else:
+            due_date = baseline + timedelta(days=days_interval)
+            subject = "Acuity Registration Reminder"
+            body = (
+                f"Hello {first_name or 'there'},\n\n"
+                "Our records show your Acuity registration is still incomplete. "
+                "Please complete registration as soon as possible.\n\n"
+                f"This reminder is sent every {days_interval} day(s) until completed."
+            )
+
+        if now < due_date:
+            continue
+
+        stats["considered"] += 1
+        if _send_graph_reminder_email(token, email, subject, body):
+            try:
+                _safe_update_cell(ws, row_idx, reminder_col, today_str)
+                stats["sent"] += 1
+            except Exception as e:
+                stats["errors"] += 1
+                print(f"[REMINDER] Sent email but failed updating sheet for {email}: {e!r}", flush=True)
+        else:
+            stats["errors"] += 1
+
+    return stats
+
+
 def check_and_populate_reminder_emails(worksheet_name: str | None = None):
     """Check for students needing reminders and auto-populate Reminder Email column.
     
@@ -1560,7 +1741,7 @@ def check_and_populate_reminder_emails(worksheet_name: str | None = None):
                 date_obj = datetime.strptime(date_str, "%m/%d/%Y")
                 if date_obj <= cutoff_date:
                     # Student is old enough, populate reminder date
-                    ws.update_cell(row_idx, 9, today_str, value_input_option="RAW")
+                    _safe_update_cell(ws, row_idx, 9, today_str)
                     updated_count += 1
                     print(f"[REMINDER] Populated reminder for {email} (added {date_str})", flush=True)
             except ValueError:
@@ -1694,8 +1875,7 @@ def run_demo(name, date, headless: bool = False):
                         (screenshot_folder / "no_pending_requests.txt").write_text(
                             f"instructor={instructor_name}\n"
                             f"date={date_label}\n"
-                            f"subject={subject}\n"
-                            f"line_index={line_index}\n",
+                            "notes=no_pending_requests\n",
                             encoding="utf-8",
                         )
                     except Exception:
