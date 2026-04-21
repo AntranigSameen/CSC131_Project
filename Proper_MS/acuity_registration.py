@@ -4,18 +4,26 @@ import re
 import logging
 from dotenv import load_dotenv
 
+"""Acuity-to-AHA registration sync helpers.
+
+This module updates only the "Acuity Registration/Regristration" flag on the
+AHA registration sheet after an RQI row is successfully appended.
+"""
+
 _AHA_GS_CLIENT = None
 _AHA_GS_SPREADSHEET = None
 _AHA_GS_WORKSHEETS = {}
 
 
 def _base_dir():
+    """Return runtime base directory for script and PyInstaller exe modes."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 
 def _resource_path(relative_path):
+    """Resolve resource paths for both dev and bundled execution."""
     try:
         base_path = sys._MEIPASS
     except Exception:
@@ -24,6 +32,7 @@ def _resource_path(relative_path):
 
 
 def _env_file():
+    """Prefer external .env, then fall back to bundled .env."""
     external_env = os.path.join(_base_dir(), ".env")
     if os.path.exists(external_env):
         return external_env
@@ -46,18 +55,22 @@ def _get_aha_registration_worksheet_name():
 
 
 def _normalize_header(value):
+    """Normalize headers to alphanumeric lowercase for tolerant matching."""
     return "".join(ch for ch in (value or "").lower() if ch.isalnum())
 
 
 def _normalize_person_name(value):
+    """Normalize person name spacing/casing while preserving word boundaries."""
     return " ".join(part for part in re.sub(r"\s+", " ", (value or "").strip()).lower().split(" ") if part)
 
 
 def _normalize_name_token(value):
+    """Normalize a single name token for strict equality comparisons."""
     return "".join(ch for ch in (value or "").lower() if ch.isalnum())
 
 
 def _first_last_from_full_name(value):
+    """Extract first and last token from a full-name cell."""
     parts = [p for p in _normalize_person_name(value).split(" ") if p]
     if len(parts) >= 2:
         return parts[0], parts[-1]
@@ -67,6 +80,7 @@ def _first_last_from_full_name(value):
 
 
 def _update_cell_raw(ws, row_idx, col_idx, value):
+    """Write cell value as RAW while handling older gspread signatures."""
     try:
         ws.update_cell(row_idx, col_idx, value, value_input_option="RAW")
     except TypeError as e:
@@ -76,6 +90,7 @@ def _update_cell_raw(ws, row_idx, col_idx, value):
 
 
 def _find_aha_registration_worksheet(spreadsheet):
+    """Find target worksheet by configured name, then title/header heuristics."""
     configured_name = _get_aha_registration_worksheet_name()
     if configured_name:
         try:
@@ -112,6 +127,7 @@ def _find_aha_registration_worksheet(spreadsheet):
 
 
 def _get_aha_gsheet_worksheet(worksheet_name=None):
+    """Return cached worksheet handle for the AHA registration sheet."""
     global _AHA_GS_CLIENT, _AHA_GS_SPREADSHEET, _AHA_GS_WORKSHEETS
 
     try:
@@ -126,9 +142,11 @@ def _get_aha_gsheet_worksheet(worksheet_name=None):
     key_path = _get_aha_service_account_path()
 
     if _AHA_GS_CLIENT is None:
+        # Authenticate once and reuse client across update calls.
         _AHA_GS_CLIENT = gspread.service_account(filename=key_path)
 
     if _AHA_GS_SPREADSHEET is None:
+        # Open spreadsheet once to avoid repeated API setup overhead.
         _AHA_GS_SPREADSHEET = _AHA_GS_CLIENT.open_by_url(sheet_url)
 
     cache_key = (worksheet_name or "").strip() or "__aha_registration__"
@@ -211,9 +229,11 @@ def update_aha_registration_status(
         row_full = (row[full_name_col - 1] if full_name_col > 0 and len(row) >= full_name_col else "").strip()
 
         if row_first or row_last:
+            # Prefer explicit first/last columns when present.
             row_first_norm = _normalize_name_token(row_first)
             row_last_norm = _normalize_name_token(row_last)
         else:
+            # Fall back to parsing first/last from a single full-name cell.
             full_first, full_last = _first_last_from_full_name(row_full)
             row_first_norm = _normalize_name_token(full_first)
             row_last_norm = _normalize_name_token(full_last)
@@ -230,6 +250,7 @@ def update_aha_registration_status(
             current_acuity,
         )
         if current_acuity == "no":
+            # Only this column is updated; all other columns are left untouched.
             _update_cell_raw(ws, row_idx, acuity_col, "Yes")
             logging.info("AHA sync flipped row %s Acuity Regristration from No to Yes", row_idx)
             return True
