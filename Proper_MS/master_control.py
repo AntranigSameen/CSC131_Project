@@ -36,7 +36,8 @@ from gui import open_settings, prompt_for_aha_credentials
 from setup_login import aha_login_check
 from outlook_authentication import authenticate
 from run_helper import run_cycle
-from run_automation import run_demo, process_due_reminder_emails
+from run_automation import run_demo
+from reminder_emailer import process_due_reminder_emails
 
 from RQI_EmailSheets.email_to_sheets import (run_forever as email_to_sheets_worker,
                                              generate_csv_now, upload_latest_csv_now, refresh_upload_window,

@@ -120,6 +120,10 @@ AUTHORITY=https://login.microsoftonline.com/your-tenant-id
 SCOPES=Mail.Read Calendars.ReadWrite
 SPREADSHEET_ID=your-google-sheet-id
 WORKSHEET_NAME=Sheet1
+
+# Acuity Registration Flipping
+AUTO_FLIP_ACUITY_REGISTRATION=true          # Auto-flip when processing emails (true/false)
+AUTO_FLIP_CHECK_INTERVAL_MINUTES=5          # Check every X minutes (0 to disable)
 ```
 
 Place your Google service account JSON files in the project root:
@@ -196,6 +200,31 @@ On your first run:
 - Click the **minimize to tray** button to run in the background
 - The app continues running and shows notifications
 - Right-click the system tray icon for quick access
+
+### Acuity Registration Flipping
+
+Flip Acuity Registration status from "No" to "Yes" using one of three methods:
+
+**1. Email-Triggered (Automatic)**
+- Set `AUTO_FLIP_ACUITY_REGISTRATION=true` in `.env`
+- Flips automatically when processing emails
+
+**2. Scheduled Checking (Time-Based)**
+- Set `AUTO_FLIP_CHECK_INTERVAL_MINUTES=5` in `.env`
+- Compares AHA sheet vs RQI sheet every X minutes
+- Run standalone: `python registration_scheduler.py`
+
+**3. Manual (On-Demand)**
+```bash
+# Flip single person
+python manual_flip_registration.py --first-name John --last-name Doe
+
+# Batch flip from CSV (FirstName,LastName columns)
+python manual_flip_registration.py --batch students.csv
+
+# Scan and flip all pending
+python manual_flip_registration.py --scan-all
+```
 
 ## 📦 Building a Standalone Executable
 
