@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, QTimer, QSize, QRect, QPropertyAnimation, QEasing
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
-                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QSlider,)
+                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 
@@ -38,8 +38,37 @@ RESTART_REQUIRED = {                                                            
     "SENDER_EMAIL",                                                                                                                   #
     "SENDER_EMAIL_RQI",                                                                                                               #
     "RQI_CSV_BATCH_MINUTES"                                                                                                           #
+    "ACUITY_NOT_REGISTERED_REMINDER_DAYS"                                                                                             #
+    "ACUITY_REGISTERED_REMINDER_YEARS"                                                                                                #
 }                                                                                                                                     # Settings that require restart after change
 
+# =====================
+# REMINDER TEMPLATES
+# =====================
+
+TEMPLATE_DIR = Path(base_dir()) / "email_templates"                                                                                   # Folder that stores editable reminder email body template files
+NOT_REGISTERED_TEMPLATE_FILE = TEMPLATE_DIR / "acuity_not_registered_email_body.txt"                                                  # Template file for non-registered Acuity users
+REGISTERED_TEMPLATE_FILE = TEMPLATE_DIR / "acuity_registered_email_body.txt"                                                          # Template file for registered Acuity users
+
+
+def ensure_template_files():
+    TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)                                                                                   # Create template folder if it does not exist yet
+
+    if not NOT_REGISTERED_TEMPLATE_FILE.exists():
+        NOT_REGISTERED_TEMPLATE_FILE.write_text("", encoding="utf-8")                                                                 # Create empty non-registered email template file on first run
+
+    if not REGISTERED_TEMPLATE_FILE.exists():
+        REGISTERED_TEMPLATE_FILE.write_text("", encoding="utf-8")                                                                     # Create empty registered email template file on first run
+
+
+def read_template_file(path: Path) -> str:
+    ensure_template_files()                                                                                                           # Make sure template directory and files exist before reading
+    return path.read_text(encoding="utf-8")                                                                                           # Return full template body text from file
+
+
+def write_template_file(path: Path, content: str):
+    ensure_template_files()                                                                                                           # Make sure template directory exists before writing
+    path.write_text(content, encoding="utf-8")                                                                                        # Save full multi-line reminder email template body to file
 
 # ===============
 # SAVE SETTINGS
@@ -48,13 +77,31 @@ RESTART_REQUIRED = {                                                            
 def save_settings(entries, restart=False):
     restart_needed = False                                                                                                            # Track whether any changed setting needs restart
 
+    ensure_template_files()                                                                                                           # Make sure reminder template files exist before saving editor content
+
     for key, widget in entries.items():
+        if key == "ACUITY_NOT_REGISTERED_EMAIL_BODY_TEMPLATE":
+            new_value = widget.toPlainText()                                                                                          # Read full multi-line body text for non-registered reminder email template
+            old_value = read_template_file(NOT_REGISTERED_TEMPLATE_FILE)
+
+            if new_value != old_value:
+                write_template_file(NOT_REGISTERED_TEMPLATE_FILE, new_value)                                                          # Save non-registered reminder email body into template file
+            continue                                                                                                                  # Skip .env write because this setting lives in a template file
+
+        if key == "ACUITY_REGISTERED_EMAIL_BODY_TEMPLATE":
+            new_value = widget.toPlainText()                                                                                          # Read full multi-line body text for registered reminder email template
+            old_value = read_template_file(REGISTERED_TEMPLATE_FILE)
+
+            if new_value != old_value:
+                write_template_file(REGISTERED_TEMPLATE_FILE, new_value)                                                              # Save registered reminder email body into template file
+            continue                                                                                                                  # Skip .env write because this setting lives in a template file
+
         # Handle both QLineEdit (text()) and QSpinBox (value())
         if isinstance(widget, QSpinBox):
-            new_value = str(widget.value())
+            new_value = str(widget.value())                                                                                           # Numeric widgets save their integer value
         else:
-            new_value = widget.text()                                                                                                 # Value currently entered in GUI
-        
+            new_value = widget.text()                                                                                                 # Standard single-line fields save their text normally
+
         old_value = os.getenv(key, "")                                                                                                # Existing loaded env value
 
         if new_value != old_value and key in RESTART_REQUIRED:
@@ -294,9 +341,9 @@ class AppTrayIcon(QSystemTrayIcon):
         if reason == QSystemTrayIcon.Trigger:
             self.show_settings()                                                                                                      # Left-click tray icon opens settings window
 
-# ==================
+# ============
 # MAIN WINDOW
-# ==================
+# ============
 
 class SettingsWindow(QMainWindow):
     def __init__(self, on_toggle_pause_all=None, on_toggle_pause_email=None,
@@ -703,6 +750,7 @@ class SettingsWindow(QMainWindow):
         self._build_sheets_tab()                                                                                                      # Google Sheets settings page
         self._build_auth_tab()                                                                                                        # Microsoft authentication settings page
         self._build_general_tab()                                                                                                     # General settings page
+        self._build_reminder_emails_tab()                                                                                             # Reminder Emails page
         self._build_logs_tab()                                                                                                        # Live logs page
 
         if self.sidebar_buttons:
@@ -968,23 +1016,7 @@ class SettingsWindow(QMainWindow):
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             form.addRow(label, edit)
 
-        # Reminder cadence for non-registered Acuity users (x days)
-        not_registered_days = QSpinBox()
-        not_registered_days.setMinimum(1)
-        not_registered_days.setMaximum(3650)
-        not_registered_days.setValue(int(os.getenv("ACUITY_NOT_REGISTERED_REMINDER_DAYS", os.getenv("REMINDER_EMAIL_DAYS", "7"))))
-        self.entries["ACUITY_NOT_REGISTERED_REMINDER_DAYS"] = not_registered_days
-        form.addRow("Not Registered Reminder (Days)", not_registered_days)
-
-        # Reminder cadence for registered Acuity users (y years)
-        registered_years = QSpinBox()
-        registered_years.setMinimum(1)
-        registered_years.setMaximum(25)
-        registered_years.setValue(int(os.getenv("ACUITY_REGISTERED_REMINDER_YEARS", "1")))
-        self.entries["ACUITY_REGISTERED_REMINDER_YEARS"] = registered_years
-        form.addRow("Registered Reminder (Years)", registered_years)
-
-        self._add_sidebar_page(ScrollablePage(page), "Sheets", "📄")                                                                 # Add Sheets page to sidebar navigation
+        self._add_sidebar_page(ScrollablePage(page), "Sheets", "📄")                                                                  # Add Sheets page to sidebar navigation
 
     # =============================
     # MICROSOFT AUTHENTICATION TAB
@@ -1027,7 +1059,75 @@ class SettingsWindow(QMainWindow):
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             form.addRow(label, edit)
 
-        self._add_sidebar_page(ScrollablePage(page), "General", "⚙️")                                                                # Add General settings page to sidebar navigation
+        self._add_sidebar_page(ScrollablePage(page), "General", "⚙️")                                                                 # Add General settings page to sidebar navigation
+
+    # ===================
+    # REMINDER EMAILS TAB
+    # ===================
+
+    def _build_reminder_emails_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)                                                                                                         # Comfortable spacing between reminder timing controls and email body editors
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        # Reminder cadence for non-registered Acuity users (x days)
+        not_registered_days = QSpinBox()
+        not_registered_days.setMinimum(1)
+        not_registered_days.setMaximum(3650)
+        not_registered_days.setValue(int(os.getenv("ACUITY_NOT_REGISTERED_REMINDER_DAYS", os.getenv("REMINDER_EMAIL_DAYS", "7"))))
+        self.entries["ACUITY_NOT_REGISTERED_REMINDER_DAYS"] = not_registered_days                                                     # Save reminder timing for non-registered Acuity users into .env
+        form.addRow("Reminder For Acuity Not Registered Yet (Days)", not_registered_days)
+
+        # Reminder cadence for registered Acuity users (y years)
+        registered_years = QSpinBox()
+        registered_years.setMinimum(1)
+        registered_years.setMaximum(25)
+        registered_years.setValue(int(os.getenv("ACUITY_REGISTERED_REMINDER_YEARS", "1")))
+        self.entries["ACUITY_REGISTERED_REMINDER_YEARS"] = registered_years                                                           # Save reminder timing for registered Acuity users into .env
+        form.addRow("Reminder For Acuity Registered Users (Years)", registered_years)
+
+        layout.addLayout(form)
+
+        ensure_template_files()                                                                                                       # Make sure template files exist before loading them into the editors
+
+        # =======================================
+        # Reminder email body for non-registered users
+        # =======================================
+
+        not_registered_body_title = QLabel("Non-Registered User Email Body")
+        not_registered_body_title.setObjectName("SectionSubtitle")                                                                    # Section heading above the non-registered reminder email body editor
+
+        self.not_registered_email_body_edit = QPlainTextEdit()
+        self.not_registered_email_body_edit.setPlaceholderText("Type the email body for non-registered users here...")                # Guide the user on what belongs in this editor
+        self.not_registered_email_body_edit.setPlainText(read_template_file(NOT_REGISTERED_TEMPLATE_FILE))                            # Load saved non-registered reminder email template from text file
+        self.not_registered_email_body_edit.setMinimumHeight(160)                                                                     # Make editor large enough to comfortably write an email body
+        self.entries["ACUITY_NOT_REGISTERED_EMAIL_BODY_TEMPLATE"] = self.not_registered_email_body_edit                               # Save editor through template-file logic in save_settings()
+
+        layout.addWidget(not_registered_body_title)
+        layout.addWidget(self.not_registered_email_body_edit)
+
+        # =======================================
+        # Reminder email body for registered users
+        # =======================================
+
+        registered_body_title = QLabel("Registered User Email Body")
+        registered_body_title.setObjectName("SectionSubtitle")                                                                        # Section heading above the registered reminder email body editor
+
+        self.registered_email_body_edit = QPlainTextEdit()
+        self.registered_email_body_edit.setPlaceholderText("Type the email body for registered users here...")                        # Guide the user on what belongs in this editor
+        self.registered_email_body_edit.setPlainText(read_template_file(REGISTERED_TEMPLATE_FILE))                                    # Load saved registered reminder email template from text file
+        self.registered_email_body_edit.setMinimumHeight(160)                                                                         # Make editor large enough to comfortably write an email body
+        self.entries["ACUITY_REGISTERED_EMAIL_BODY_TEMPLATE"] = self.registered_email_body_edit                                       # Save editor through template-file logic in save_settings()
+
+        layout.addWidget(registered_body_title)
+        layout.addWidget(self.registered_email_body_edit)
+
+        layout.addStretch(1)                                                                                                          # Push reminder email controls upward so page feels tidy
+
+        self._add_sidebar_page(ScrollablePage(page), "Reminder Emails", "⏰")                                                         # Add Reminder Emails page to sidebar navigation
 
     # =========
     # lOGS TAB
@@ -1731,6 +1831,32 @@ class SettingsWindow(QMainWindow):
                 border-radius: 10px;
                 padding: 8px;
             }
+            
+            QSpinBox {
+                background-color: #1f2125;
+                color: white;
+                border: 1px solid #3b3d42;
+                border-radius: 10px;
+                padding: 8px;                                                                                                         /* Match QLineEdit internal spacing */
+                min-height: 18px;
+                selection-background-color: #3b82f6;
+            }
+
+            QSpinBox:hover {
+                border: 1px solid #4b5563;                                                                                            /* Slight hover highlight like other inputs */
+            }
+
+            QSpinBox:focus {
+                border: 1px solid #3b82f6;                                                                                            /* Blue focus border to match active text fields */
+            }
+
+            QSpinBox::up-button,
+            QSpinBox::down-button {
+                width: 0px;
+                border: none;
+                background: transparent;
+            }
+
             QPlainTextEdit {
                 background-color: #1b1d21;
                 color: #d7dce2;
