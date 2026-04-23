@@ -162,9 +162,6 @@ def validate_sftp_settings() -> List[str]:
     if not _get_sftp_password():
         missing_items.append("Password")                                                                                              # Required to authenticate to SFTP
 
-    if not _get_sftp_remote_path():
-        missing_items.append("Remote File Path")                                                                                      # Required so uploads know where to land on the SFTP server
-
     return missing_items                                                                                                              # Return all missing SFTP fields so GUI can block upload and show one clean validation message
 
 def _floor_datetime_to_interval(now: datetime, minutes: int) -> datetime:
