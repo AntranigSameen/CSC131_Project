@@ -674,6 +674,11 @@ def _extract_values_by_known_labels(
             all_aliases.append(alias)
 
     stop_labels = stop_labels or []
+    boundary_compact_labels = {
+        _compact_label(alias)
+        for alias in (all_aliases + stop_labels)
+        if alias and _compact_label(alias)
+    }
 
     if not all_aliases and not stop_labels:
         return {key: "" for key in label_aliases}
@@ -717,12 +722,25 @@ def _extract_values_by_known_labels(
                     # Get the next non-empty line as the value
                     for j in range(i + 1, len(lines)):
                         next_line = re.sub(r"\s+", " ", lines[j]).strip()
-                        if next_line and ":" not in next_line:
+                        if not next_line:
+                            continue
+
+                        # Stop only when the next line is actually another known label,
+                        # not when it simply contains a time like "10:00 AM".
+                        if next_line.endswith(":"):
+                            trailing_label = _compact_label(next_line[:-1])
+                            if trailing_label in boundary_compact_labels:
+                                break
+
+                        if ":" in next_line:
+                            candidate_label, candidate_value = next_line.split(":", 1)
+                            if _compact_label(candidate_label) in boundary_compact_labels:
+                                break
                             extracted[key] = next_line
                             break
-                        elif ":" in next_line:
-                            # Hit another label with colon format, stop
-                            break
+
+                        extracted[key] = next_line
+                        break
                     break
 
     # Try same-line format without colon (e.g., "for Kaleigh Henson" on one line)
