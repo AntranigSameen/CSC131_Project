@@ -124,6 +124,20 @@ WORKSHEET_NAME=Sheet1
 # Acuity Registration Flipping
 AUTO_FLIP_ACUITY_REGISTRATION=true          # Auto-flip when processing emails (true/false)
 AUTO_FLIP_CHECK_INTERVAL_MINUTES=5          # Check every X minutes (0 to disable)
+
+# AHA Location-Based Auto Emailer
+AHA_LOCATION_EMAIL_ENABLED=false            # Enable auto-email scan/send from RQI sheet rows
+AHA_REGISTRATION_WORKSHEET=AHA Registration # Worksheet/tab to scan (optional)
+AHA_LOCATION_EMAIL_RULES_JSON={"Main Campus":{"subject":"AHA update for {location}","body":"Hello {first_name},\n\nPlease complete the required AHA steps for {location}."}}
+# Optional per-row gating column in sheet: "Location Email Enabled" (Yes/No)
+# Dedupe tracking is local by default (no RQI writes):
+LOCATION_EMAIL_TRACKER_FILE=Proper_MS/location_email_tracker.txt
+LOCATION_EMAIL_TRACKING_SECRET=change-me
+LOCATION_EMAIL_WRITEBACK_TO_RQI=false       # keep false to avoid writing extra data to RQI sheet
+
+# One-time completion reminder when fully paid + Acuity yes + AHA yes
+ACUITY_AHA_COMPLETION_SUBJECT=AHA and Acuity Registration Completed
+ACUITY_AHA_COMPLETION_BODY=Hello {first_name},\n\nOur records show you are fully paid, Acuity registered, and AHA registered.
 ```
 
 Place your Google service account JSON files in the project root:
@@ -225,6 +239,77 @@ python manual_flip_registration.py --batch students.csv
 # Scan and flip all pending
 python manual_flip_registration.py --scan-all
 ```
+
+### AHA Location-Based Auto Emailer
+
+Send one email per person based on their location in the AHA sheet.
+
+**How it works**
+- Runs inside the existing automation loop.
+- Reads each row in the configured RQI worksheet (`WORKSHEET_NAME`, default `Leads`).
+- Uses `Email` and `LocationName` from the same row.
+- Sends only after the same email appears in the AHA registration sheet with `AHA Registration` = yes.
+- Uses a cycle marker from row date fields (`Date` / `HireDate` / `ActiveDate` / `RegistrationDate`) in dedupe hashing.
+- Returning customers can receive updated emails on a new registration cycle (for example, after two years).
+- Validates/translates `LocationName` through the Location Keys store before sending.
+- Skips rows already present in a local hashed tracker file (`location_email_tracker.txt`).
+- Does not write back to RQI by default.
+- Optional writeback to `Location Email Sent` can be enabled via `LOCATION_EMAIL_WRITEBACK_TO_RQI=true`.
+
+**Note**
+- Fully completed users are handled by the location email flow.
+- The legacy completion reminder text is no longer sent for those rows.
+
+**Column expectations**
+- Location column: `LocationName` (preferred; also supports `Location Name`, `Location`)
+- Email column: `Email` or `Email Address`
+- Optional gate column: `Location Email Enabled` (only sends when true/yes)
+- Dedupe tracking column: `Location Email Sent` (optional, only if writeback is enabled)
+
+**Template placeholders (for rules JSON)**
+- `{first_name}`, `{last_name}`, `{full_name}`, `{email}`, `{location}`, `{today}`
+
+### Location Key Store (GUI Managed)
+
+You can now manage location keys directly in the GUI on the **Location Keys** page.
+
+**What it does**
+- Stores key-to-location mappings in a text file.
+- Lets you add/update and remove mappings from the GUI.
+- Keeps mappings in `Proper_MS/location_keys.txt` format as `KEY|Location Name`.
+
+**Example**
+- `SAC_MAIN|Sacramento Main Campus`
+- `FOLSOM_SITE|Folsom Training Site`
+
+### Location Email Tracker (GUI Audit)
+
+Use the **Location Tracker** page in the GUI to audit sent location emails.
+
+**What it stores**
+- Local tracker rows in `timestamp|sha256_hash` format.
+- Hash is derived from email + resolved location + optional secret.
+- No raw email or location values are stored in tracker rows.
+
+**What you can do in GUI**
+- Refresh tracker view.
+- Clear tracker entries.
+- See tracker file path used by runtime config.
+
+### Location Email Formats (Template Store)
+
+Store all location-specific email formats in a single JSON template file:
+- `Proper_MS/location_email_templates.json`
+
+You can edit this in the GUI on the **Location Templates** page.
+
+**Selection logic**
+- First match by location key (`by_key`)
+- Then match by resolved location name (`by_location`)
+- Then fall back to `default`
+
+**Template placeholders**
+- `{first_name}`, `{last_name}`, `{full_name}`, `{email}`, `{location}`, `{location_key}`, `{today}`
 
 ## 📦 Building a Standalone Executable
 

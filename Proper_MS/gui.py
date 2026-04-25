@@ -4,6 +4,7 @@
 
 import os
 import sys
+import json
 import subprocess
 import logging
 from pathlib import Path
@@ -13,9 +14,26 @@ from PySide6.QtCore import Qt, QTimer, QSize, QRect, QPropertyAnimation, QEasing
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
-                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox,)
+                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
+from location_keys import (
+    load_location_keys,
+    upsert_location_key,
+    remove_location_key,
+    get_location_keys_file_path,
+)
+from location_email_tracker import (
+    load_tracker_entries,
+    get_tracker_file_path,
+    clear_tracker_file,
+)
+from location_email_templates import (
+    get_location_templates_file_path,
+    ensure_location_templates_file,
+    ensure_location_template_entry,
+    remove_location_template_entry,
+)
 
 # ============================
 # LOAD ENVIRONMENT VARIABLES
@@ -95,6 +113,19 @@ def save_settings(entries, restart=False):
             if new_value != old_value:
                 write_template_file(REGISTERED_TEMPLATE_FILE, new_value)                                                              # Save registered reminder email body into template file
             continue                                                                                                                  # Skip .env write because this setting lives in a template file
+
+        if key == "LOCATION_EMAIL_TEMPLATES_JSON_EDITOR":
+            new_value = widget.toPlainText()
+            try:
+                parsed = json.loads(new_value or "{}")
+                pretty = json.dumps(parsed, indent=2)
+            except Exception as e:
+                QMessageBox.critical(None, "Invalid Template JSON", f"Could not save location templates:\n{e}")
+                continue
+
+            template_path = ensure_location_templates_file()
+            Path(template_path).write_text(pretty + "\n", encoding="utf-8")
+            continue
 
         # Handle both QLineEdit (text()) and QSpinBox (value())
         if isinstance(widget, QSpinBox):
@@ -751,6 +782,9 @@ class SettingsWindow(QMainWindow):
         self._build_auth_tab()                                                                                                        # Microsoft authentication settings page
         self._build_general_tab()                                                                                                     # General settings page
         self._build_reminder_emails_tab()                                                                                             # Reminder Emails page
+        self._build_location_keys_tab()                                                                                               # Location key mapping page
+        self._build_location_templates_tab()                                                                                          # Location email template editor page
+        self._build_location_tracker_tab()                                                                                            # Location email tracker audit page
         self._build_logs_tab()                                                                                                        # Live logs page
 
         if self.sidebar_buttons:
@@ -1128,6 +1162,446 @@ class SettingsWindow(QMainWindow):
         layout.addStretch(1)                                                                                                          # Push reminder email controls upward so page feels tidy
 
         self._add_sidebar_page(ScrollablePage(page), "Reminder Emails", "⏰")                                                         # Add Reminder Emails page to sidebar navigation
+
+    # =========
+    # LOCATION KEYS TAB
+    # =========
+
+    def _build_location_keys_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)
+
+        title = QLabel("Location Keys")
+        title.setObjectName("SectionTitle")
+
+        subtitle = QLabel(
+            "Manage the key-to-location list used by automation. "
+            "Entries are saved in a plain text file and can be added or removed here."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setObjectName("SectionSubtitle")
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.location_key_edit = QLineEdit()
+        self.location_key_edit.setPlaceholderText("Location key (example: SAC_MAIN)")
+        form.addRow("Key", self.location_key_edit)
+
+        self.location_name_edit = QLineEdit()
+        self.location_name_edit.setPlaceholderText("Location name (example: Sacramento Main Campus)")
+        form.addRow("Location", self.location_name_edit)
+
+        layout.addLayout(form)
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
+
+        self.add_location_key_btn = QPushButton("Add / Update")
+        self.add_location_key_btn.setObjectName("ActionButton")
+        self.add_location_key_btn.clicked.connect(lambda: self._animate_button_press(self.add_location_key_btn))
+        self.add_location_key_btn.clicked.connect(self._add_location_key_clicked)
+
+        self.remove_location_key_btn = QPushButton("Remove")
+        self.remove_location_key_btn.setObjectName("ActionButton")
+        self.remove_location_key_btn.clicked.connect(lambda: self._animate_button_press(self.remove_location_key_btn))
+        self.remove_location_key_btn.clicked.connect(self._remove_location_key_clicked)
+
+        self.refresh_location_keys_btn = QPushButton("Refresh")
+        self.refresh_location_keys_btn.setObjectName("ActionButton")
+        self.refresh_location_keys_btn.clicked.connect(lambda: self._animate_button_press(self.refresh_location_keys_btn))
+        self.refresh_location_keys_btn.clicked.connect(self._refresh_location_keys_list)
+
+        action_row.addWidget(self.add_location_key_btn)
+        action_row.addWidget(self.remove_location_key_btn)
+        action_row.addWidget(self.refresh_location_keys_btn)
+        action_row.addStretch(1)
+
+        layout.addLayout(action_row)
+
+        self.location_keys_list = QListWidget()
+        self.location_keys_list.itemSelectionChanged.connect(self._sync_location_selection_to_inputs)
+        layout.addWidget(self.location_keys_list, 1)
+
+        self.location_store_path_label = QLabel("")
+        self.location_store_path_label.setWordWrap(True)
+        layout.addWidget(self.location_store_path_label)
+
+        self._refresh_location_keys_list()
+        self._add_sidebar_page(ScrollablePage(page), "Location Keys", "🗺️")
+
+    def _refresh_location_keys_list(self):
+        pairs = load_location_keys()
+        self.location_keys_list.clear()
+
+        for key in sorted(pairs.keys(), key=lambda value: value.lower()):
+            self.location_keys_list.addItem(f"{key} | {pairs[key]}")
+
+        self.location_store_path_label.setText(f"Storage file: {get_location_keys_file_path()}")
+
+    def _sync_location_selection_to_inputs(self):
+        selected_items = self.location_keys_list.selectedItems()
+        if not selected_items:
+            return
+
+        text = selected_items[0].text()
+        if "|" not in text:
+            return
+
+        key, location = text.split("|", 1)
+        self.location_key_edit.setText(key.strip())
+        self.location_name_edit.setText(location.strip())
+
+    def _add_location_key_clicked(self):
+        key = self.location_key_edit.text().strip()
+        location = self.location_name_edit.text().strip()
+
+        if not key or not location:
+            QMessageBox.warning(self, "Missing Value", "Both key and location are required.")
+            return
+
+        try:
+            upsert_location_key(key, location)
+            template_created = ensure_location_template_entry(key, location)
+            self._refresh_location_keys_list()
+            self._reload_location_templates_editor_from_disk()
+            message = f"Location key saved: {key}"
+            if template_created:
+                message += "\n\nA matching location email template entry was also created."
+            QMessageBox.information(self, "Saved", message)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Failed", str(e))
+
+    def _remove_location_key_clicked(self):
+        key = self.location_key_edit.text().strip()
+        if not key:
+            selected_items = self.location_keys_list.selectedItems()
+            if selected_items and "|" in selected_items[0].text():
+                key = selected_items[0].text().split("|", 1)[0].strip()
+
+        if not key:
+            QMessageBox.warning(self, "Missing Key", "Enter or select a key to remove.")
+            return
+
+        try:
+            removed = remove_location_key(key)
+            if not removed:
+                QMessageBox.information(self, "Not Found", f"Location key not found: {key}")
+                return
+
+            remove_location_template_entry(key)
+            self._refresh_location_keys_list()
+            self._reload_location_templates_editor_from_disk()
+            self.location_key_edit.clear()
+            self.location_name_edit.clear()
+            QMessageBox.information(self, "Removed", f"Location key removed: {key}")
+        except Exception as e:
+            QMessageBox.critical(self, "Remove Failed", str(e))
+
+    def _reload_location_templates_editor_from_disk(self):
+        if not hasattr(self, "location_templates_editor"):
+            return
+
+        template_path = get_location_templates_file_path()
+        try:
+            self.location_templates_editor.setPlainText(Path(template_path).read_text(encoding="utf-8"))
+        except Exception:
+            self.location_templates_editor.setPlainText("{}")
+
+        self._refresh_location_template_key_list()
+
+    def _parse_location_templates_editor_json(self, show_error: bool = False):
+        if not hasattr(self, "location_templates_editor"):
+            return None
+
+        raw = self.location_templates_editor.toPlainText().strip() or "{}"
+        try:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise ValueError("Template JSON must be an object.")
+            return parsed
+        except Exception as e:
+            if show_error:
+                QMessageBox.critical(self, "Invalid Template JSON", f"Could not parse location templates:\n{e}")
+            return None
+
+    def _refresh_location_template_key_list(self, preferred_key: str = ""):
+        if not hasattr(self, "location_template_keys_list"):
+            return
+
+        parsed = self._parse_location_templates_editor_json(show_error=False)
+        if parsed is None:
+            return
+
+        by_key = parsed.get("by_key") if isinstance(parsed.get("by_key"), dict) else {}
+        # Keep insertion order so newly added locations appear at the bottom.
+        keys = list(by_key.keys())
+
+        self.location_template_keys_list.clear()
+        for key in keys:
+            self.location_template_keys_list.addItem(key)
+
+        target = (preferred_key or self.location_template_key_edit.text() or "").strip()
+        if not target and keys:
+            target = keys[0]
+
+        if target:
+            for idx in range(self.location_template_keys_list.count()):
+                item = self.location_template_keys_list.item(idx)
+                if (item.text() or "").strip() == target:
+                    self.location_template_keys_list.setCurrentRow(idx)
+                    break
+
+    def _sync_template_selection_to_inputs(self):
+        if not hasattr(self, "location_template_keys_list"):
+            return
+
+        selected_items = self.location_template_keys_list.selectedItems()
+        if not selected_items:
+            return
+
+        key = selected_items[0].text().strip()
+        self.location_template_key_edit.setText(key)
+
+        parsed = self._parse_location_templates_editor_json(show_error=False)
+        if parsed is None:
+            return
+
+        by_key = parsed.get("by_key") if isinstance(parsed.get("by_key"), dict) else {}
+        entry = by_key.get(key) if isinstance(by_key.get(key), dict) else {}
+
+        self.location_template_subject_edit.setText((entry.get("subject") or "").strip())
+        self.location_template_body_edit.setPlainText(entry.get("body") or "")
+
+    def _save_template_entry_from_inputs(self):
+        parsed = self._parse_location_templates_editor_json(show_error=True)
+        if parsed is None:
+            return
+
+        key = (self.location_template_key_edit.text() or "").strip()
+        if not key:
+            QMessageBox.warning(self, "Missing Template Key", "Enter or select a template key.")
+            return
+
+        subject = self.location_template_subject_edit.text().strip()
+        body = self.location_template_body_edit.toPlainText()
+
+        if not isinstance(parsed.get("default"), dict):
+            parsed["default"] = {}
+        if not isinstance(parsed.get("by_key"), dict):
+            parsed["by_key"] = {}
+        if not isinstance(parsed.get("by_location"), dict):
+            parsed["by_location"] = {}
+
+        parsed["by_key"][key] = {
+            "subject": subject,
+            "body": body,
+        }
+
+        self.location_templates_editor.setPlainText(json.dumps(parsed, indent=2) + "\n")
+        self._refresh_location_template_key_list(preferred_key=key)
+        QMessageBox.information(self, "Template Saved", f"Template entry saved for key: {key}")
+
+    def _format_location_templates_json(self):
+        parsed = self._parse_location_templates_editor_json(show_error=True)
+        if parsed is None:
+            return
+
+        self.location_templates_editor.setPlainText(json.dumps(parsed, indent=2) + "\n")
+        self._refresh_location_template_key_list()
+
+    # =========
+    # LOCATION TEMPLATES TAB
+    # =========
+
+    def _build_location_templates_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)
+
+        title = QLabel("Location Email Templates")
+        title.setObjectName("SectionTitle")
+
+        subtitle = QLabel(
+            "Store per-location email formats in JSON. "
+            "Selection order is by_key, then by_location, then default."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setObjectName("SectionSubtitle")
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        ensure_location_templates_file()
+        template_path = get_location_templates_file_path()
+
+        self.location_templates_path_label = QLabel(f"Template file: {template_path}")
+        self.location_templates_path_label.setWordWrap(True)
+        layout.addWidget(self.location_templates_path_label)
+
+        structured_hint = QLabel(
+            "Use the fields below to edit one location at a time. "
+            "This updates the JSON automatically so users do not need to hand-edit JSON."
+        )
+        structured_hint.setWordWrap(True)
+        structured_hint.setObjectName("SectionSubtitle")
+        layout.addWidget(structured_hint)
+
+        new_location_hint = QLabel(
+            "New locations appear at the bottom of the list below."
+        )
+        new_location_hint.setWordWrap(True)
+        new_location_hint.setObjectName("SectionSubtitle")
+        layout.addWidget(new_location_hint)
+
+        self.location_template_keys_list = QListWidget()
+        self.location_template_keys_list.setMinimumHeight(120)
+        self.location_template_keys_list.itemSelectionChanged.connect(self._sync_template_selection_to_inputs)
+        layout.addWidget(self.location_template_keys_list)
+
+        template_form = QFormLayout()
+        template_form.setSpacing(8)
+
+        self.location_template_key_edit = QLineEdit()
+        self.location_template_key_edit.setPlaceholderText("Template key (example: TN Film)")
+        template_form.addRow("Key", self.location_template_key_edit)
+
+        self.location_template_subject_edit = QLineEdit()
+        self.location_template_subject_edit.setPlaceholderText("Email subject")
+        template_form.addRow("Subject", self.location_template_subject_edit)
+
+        self.location_template_body_edit = QPlainTextEdit()
+        self.location_template_body_edit.setMinimumHeight(180)
+        self.location_template_body_edit.setPlaceholderText("Email body for the selected location key")
+        template_form.addRow("Body", self.location_template_body_edit)
+
+        layout.addLayout(template_form)
+
+        template_actions = QHBoxLayout()
+        template_actions.setContentsMargins(0, 0, 0, 0)
+        template_actions.setSpacing(8)
+
+        self.template_entry_save_btn = QPushButton("Save Selected Entry")
+        self.template_entry_save_btn.setObjectName("ActionButton")
+        self.template_entry_save_btn.clicked.connect(lambda: self._animate_button_press(self.template_entry_save_btn))
+        self.template_entry_save_btn.clicked.connect(self._save_template_entry_from_inputs)
+
+        self.template_json_format_btn = QPushButton("Format JSON")
+        self.template_json_format_btn.setObjectName("ActionButton")
+        self.template_json_format_btn.clicked.connect(lambda: self._animate_button_press(self.template_json_format_btn))
+        self.template_json_format_btn.clicked.connect(self._format_location_templates_json)
+
+        template_actions.addWidget(self.template_entry_save_btn)
+        template_actions.addWidget(self.template_json_format_btn)
+        template_actions.addStretch(1)
+        layout.addLayout(template_actions)
+
+        self.location_templates_editor = QPlainTextEdit()
+        self.location_templates_editor.setMinimumHeight(320)
+        self.location_templates_editor.setPlaceholderText(
+            '{\n  "default": {"subject": "...", "body": "..."},\n  "by_key": {},\n  "by_location": {}\n}'
+        )
+
+        try:
+            self.location_templates_editor.setPlainText(Path(template_path).read_text(encoding="utf-8"))
+        except Exception:
+            self.location_templates_editor.setPlainText("{}")
+
+        self._refresh_location_template_key_list()
+
+        self.entries["LOCATION_EMAIL_TEMPLATES_JSON_EDITOR"] = self.location_templates_editor
+        layout.addWidget(self.location_templates_editor, 1)
+
+        layout.addStretch(1)
+        self._add_sidebar_page(ScrollablePage(page), "Location Templates", "📝")
+
+    # =========
+    # LOCATION TRACKER TAB
+    # =========
+
+    def _build_location_tracker_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)
+
+        title = QLabel("Location Email Tracker")
+        title.setObjectName("SectionTitle")
+
+        subtitle = QLabel(
+            "Audit one-time location email sends without writing tracking data into the RQI sheet. "
+            "Tracker rows store timestamp and hashed identifiers."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setObjectName("SectionSubtitle")
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
+
+        self.refresh_location_tracker_btn = QPushButton("Refresh")
+        self.refresh_location_tracker_btn.setObjectName("ActionButton")
+        self.refresh_location_tracker_btn.clicked.connect(lambda: self._animate_button_press(self.refresh_location_tracker_btn))
+        self.refresh_location_tracker_btn.clicked.connect(self._refresh_location_tracker_list)
+
+        self.clear_location_tracker_btn = QPushButton("Clear Tracker")
+        self.clear_location_tracker_btn.setObjectName("ActionButton")
+        self.clear_location_tracker_btn.clicked.connect(lambda: self._animate_button_press(self.clear_location_tracker_btn))
+        self.clear_location_tracker_btn.clicked.connect(self._clear_location_tracker_clicked)
+
+        action_row.addWidget(self.refresh_location_tracker_btn)
+        action_row.addWidget(self.clear_location_tracker_btn)
+        action_row.addStretch(1)
+
+        layout.addLayout(action_row)
+
+        self.location_tracker_list = QListWidget()
+        layout.addWidget(self.location_tracker_list, 1)
+
+        self.location_tracker_path_label = QLabel("")
+        self.location_tracker_path_label.setWordWrap(True)
+        layout.addWidget(self.location_tracker_path_label)
+
+        self._refresh_location_tracker_list()
+        self._add_sidebar_page(ScrollablePage(page), "Location Tracker", "📬")
+
+    def _refresh_location_tracker_list(self):
+        entries = load_tracker_entries()
+        self.location_tracker_list.clear()
+
+        if not entries:
+            self.location_tracker_list.addItem("No tracker entries yet.")
+        else:
+            for timestamp, hash_value in entries:
+                if timestamp:
+                    self.location_tracker_list.addItem(f"{timestamp} | {hash_value}")
+                else:
+                    self.location_tracker_list.addItem(f"(legacy) | {hash_value}")
+
+        self.location_tracker_path_label.setText(f"Tracker file: {get_tracker_file_path()}")
+
+    def _clear_location_tracker_clicked(self):
+        result = QMessageBox.question(
+            self,
+            "Clear Tracker",
+            "Clear all location email tracker entries?",
+        )
+        if result != QMessageBox.Yes:
+            return
+
+        try:
+            clear_tracker_file()
+            self._refresh_location_tracker_list()
+            QMessageBox.information(self, "Tracker Cleared", "Location email tracker entries were cleared.")
+        except Exception as e:
+            QMessageBox.critical(self, "Clear Failed", str(e))
 
     # =========
     # lOGS TAB
