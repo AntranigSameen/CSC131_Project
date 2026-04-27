@@ -17,6 +17,8 @@ datas = [
     (str(project_root / "service_account.json"), "."),
     (str(project_root / "google_sheet_api_key.json"), "."),
     (str(project_root / "icon.png"), "."),
+    (str(project_root / "Proper_MS" / "location_keys.txt"), "."),
+    (str(project_root / "Proper_MS" / "location_email_templates.json"), "."),
 ]
 
 a = Analysis(

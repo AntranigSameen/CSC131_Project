@@ -37,7 +37,7 @@ from setup_login import aha_login_check
 from outlook_authentication import authenticate
 from run_helper import run_cycle
 from run_automation import run_demo
-from reminder_emailer import process_due_reminder_emails
+from reminder_emailer import process_due_reminder_emails, process_aha_location_emails
 
 from RQI_EmailSheets.email_to_sheets import (run_forever as email_to_sheets_worker,
                                              generate_csv_now, upload_latest_csv_now, refresh_upload_window,
@@ -388,6 +388,19 @@ def automation_loop():
                 )
         except Exception as e:
             logging.exception("Reminder cycle failed: %s", e)
+
+        try:
+            location_email_stats = process_aha_location_emails(token)
+            if location_email_stats.get("sent", 0) > 0:
+                logging.info(
+                    "AHA location email cycle sent=%d considered=%d errors=%d skipped=%d",
+                    location_email_stats.get("sent", 0),
+                    location_email_stats.get("considered", 0),
+                    location_email_stats.get("errors", 0),
+                    location_email_stats.get("skipped", 0),
+                )
+        except Exception as e:
+            logging.exception("AHA location email cycle failed: %s", e)
 
         logging.info("Cycle complete. Waiting %d seconds for next cycle...", interval)
         time.sleep(interval)                                                                                                         # Wait before next email parsing cycle
