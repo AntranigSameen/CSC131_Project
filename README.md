@@ -13,30 +13,30 @@ Both systems run independently with their own start/stop controls, accessible th
 
 ## ✨ Key Features
 
-- **📊 Interactive GUI Dashboard** - Real-time status monitoring, live activity logs, and easy control buttons
-- **🔒 Secure Authentication** - OAuth2-based login (no passwords stored locally)
-- **📧 Email Integration** - Connects to Outlook via Microsoft Graph API
-- **📈 Google Sheets Integration** - Automatically updates spreadsheets with extracted data
-- **📅 Calendar Management** - Creates events and reminders automatically
-- **🌐 Web Automation** - Browser-based automation for AHA course registration
-- **🔔 System Tray Integration** - Run minimized in the background with notification support
-- **⚙️ Settings Panel** - Configure all credentials and settings through the GUI
+- **📊 Interactive GUI Dashboard** - Real-time status monitoring, live activity logs, and independent start/stop controls for each automation
+- **🔒 Secure Authentication** - OAuth2-based login for Outlook (no passwords stored locally)
+- **📧 Email Integration** - Connects to Outlook via Microsoft Graph API with automatic lead extraction
+- **📈 Google Sheets Integration** - Automatically appends extracted data to configured spreadsheets
+- **📅 Calendar Management** - Creates events and reminders automatically from email data
+- **🌐 Web Automation** - Playwright-based browser automation for AHA course registration
+- **🔔 System Tray Integration** - Run minimized with quick access menu and desktop notifications
+- **⚙️ Settings Panel** - Configure all credentials and automation settings through the GUI (no manual file editing needed)
 
 ## 🔧 Prerequisites
 
-Before installing, make sure you have:
-
+### Software Requirements
 - **Python 3.8 or higher** ([Download Python](https://www.python.org/downloads/))
-- **Microsoft Outlook account** with email access
-- **Azure App Registration** (for Outlook API access)
-  - Client ID
-  - Tenant ID
-  - Appropriate API permissions (Mail.Read, Calendars.ReadWrite)
-- **Google Cloud Service Account** (for Sheets access)
-  - Service account JSON key file
-  - Sheets API enabled
-- **AHA Platform Credentials** (if using training automation)
 - **Internet connection** (required for API calls and web automation)
+
+### Service Accounts & Credentials
+You'll need access to the following services. Configuration can be done through the GUI after installation:
+
+- **Microsoft Outlook** with Azure App Registration
+  - Client ID, Tenant ID, and API permissions (Mail.Read, Calendars.ReadWrite)
+- **Google Cloud Service Account** for Sheets API
+  - Service account JSON key files
+  - Sheets API enabled in your Google Cloud project
+- **AHA Platform Credentials** (only if using training automation)
 
 ## 🚀 Installation
 
@@ -66,19 +66,8 @@ chmod +x scripts/setup.sh
 
 The setup script will:
 - ✅ Create a virtual environment in `.venv/`
-- ✅ Install all required Python packages (tkinter, playwright, gspread, msal, etc.)
-- ✅ Set up the development environment
-
-### Step 3: Install Playwright Browsers
-
-After the Python packages are installed, run:
-
-```bash
-# Activate the virtual environment first (see "Running the Application" below)
-playwright install
-```
-
-This downloads the browser binaries needed for web automation.
+- ✅ Install all required Python packages (playwright, gspread, msal, ttkbootstrap, etc.)
+- ✅ Download Playwright browser binaries for web automation
 
 ## ⚙️ Configuration
 
@@ -93,26 +82,29 @@ You'll need to set up credentials for the various services. The good news is tha
    - `SCOPES` - API permission scopes (e.g., `Mail.Read Calendars.ReadWrite`)
 
 2. **Google Sheets API**
-   - `service_account.json` - Google service account credentials
-   - `google_sheet_api_key.json` - Additional API key file
-   - `SPREADSHEET_ID` - The ID of your Google Sheet (found in the sheet URL)
-   - `WORKSHEET_NAME` - The specific worksheet/tab name
+Most configuration can be done through the **GUI Settings Panel** - no manual file editing required!
 
-3. **AHA Platform**
-   - Credentials will be prompted on first run
-   - Can be saved through the Settings panel
+### Required Credentials
 
-### Setting Up Credentials
+1. **Azure App Registration** (for Outlook/Email access)
+   - CLIENT_ID, TENANT_ID, AUTHORITY URL
+   - SCOPES: `Mail.Read Calendars.ReadWrite`
 
-**Option 1: Using the GUI (Recommended)**
-1. Launch the application (see "Running the Application" below)
-2. Click the "Settings" button
-3. Enter your credentials in the form fields
-4. Click "Save Settings"
+2. **Google Sheets API**
+   - Place `service_account.json` and `google_sheet_api_key.json` in project root
+   - SPREADSHEET_ID (from your Google Sheet URL)
+   - WORKSHEET_NAME (sheet tab name)
 
-**Option 2: Manual Configuration**
-Create/edit a `.env` file in the project root with your credentials:
+3. **AHA Platform** - Enter credentials when prompted or via Settings panel
 
+### Setup Options
+
+**GUI Settings Panel (Recommended):**
+1. Launch the app and click "Settings"
+2. Enter your credentials
+3. Click "Save Settings"
+
+**Manual .env File:**
 ```env
 CLIENT_ID=your-azure-client-id
 TENANT_ID=your-azure-tenant-id
@@ -120,103 +112,66 @@ AUTHORITY=https://login.microsoftonline.com/your-tenant-id
 SCOPES=Mail.Read Calendars.ReadWrite
 SPREADSHEET_ID=your-google-sheet-id
 WORKSHEET_NAME=Sheet1
-
-# Acuity Registration Flipping
-AUTO_FLIP_ACUITY_REGISTRATION=true          # Auto-flip when processing emails (true/false)
-AUTO_FLIP_CHECK_INTERVAL_MINUTES=5          # Check every X minutes (0 to disable)
-```
-
-Place your Google service account JSON files in the project root:
-- `service_account.json`
-- `google_sheet_api_key.json`
-
-## ▶️ Running the Application
-
-### Development Mode
-
-1. **Activate the virtual environment:**
-
-   **On Mac/Linux:**
-   ```bash
-   source .venv/bin/activate
-   ```
+AUTO_FLIP_ACUITY_REGISTRATION=true
+AUTO_FLIP_CHECK_INTERVAL_MINUTES=5
+``
 
    **On Windows:**
    ```powershell
    .venv\Scripts\activate
    ```
 
-2. **Launch the application:**
-   ```bash
-   pyinstaller master_control.spec --clean
-   ```
+2. *Activate Virtual Environment
 
-The GUI window will open with:
-- **Dashboard Tab** - Shows system status and control buttons
-- **Settings Tab** - Configure all credentials and settings
-- **Logs Tab** - View real-time activity logs
-- **System Tray Icon** - Minimize to tray and get notifications
+**Mac/Linux:**
+```bash
+source .venv/bin/activate
+```
 
-### First Run
+**Windows:**
+```powershell
+.venv\Scripts\activate
+```
 
-On your first run:
-1. The app will prompt you to authenticate with Microsoft (for Outlook access)
-2. A browser window will open for OAuth2 login
-3. After authorization, the token is cached for future use
-4. If AHA automation is needed, you'll be prompted for those credentials
+### Launch the Application
 
-## 📖 Usage Guide
+```bash
+python Proper_MS/master_control.py
+```
 
-### Starting Email Processing
+The GUI opens with three main tabs:
+- **Dashboard** - System status cards and automation controls
+- **Settings** - Credential and configuration management  
+- **Logs** - Real-time activity viewer with search/filter
 
-1. Ensure your Outlook credentials are configured
-2. Click **"Start RQI Email Processing"** button
-3. The system will:
-   - Monitor your inbox for new emails matching specific criteria
-   - Extract lead information (names, dates, course details)
-   - Append data to the configured Google Sheet
-   - Create calendar events for important dates
-4. View live updates in the **Logs** tab
+### First Run Setup
 
+1. Microsoft OAuth login opens in your browser automatically
+2. Authorize the application to access your Outlook account
+3. Token is cached locally (`.token_cache`) for future sessions
+4. Configure remaining credentials via Settings tab if not already done
 ### Starting AHA Training Automation
 
 1. Ensure AHA credentials are configured
 2. Click **"Start AHA Automation"** button
 3. The system will:
    - Open an automated browser session
-   - Navigate to the AHA training platform
-   - Complete registration forms
-   - Submit course data
-4. Monitor progress in the **Logs** tab
+   -Using the Automation Systems
 
-### Pausing/Stopping
+**RQI Email Processing:**
+1. Click **"Start RQI Email Processing"**
+2. Monitors inbox → Extracts lead data → Updates Google Sheet → Creates calendar events
+3. View live updates in Logs tab
 
-- Each automation can be **paused** and **resumed** independently
-- Use the corresponding control buttons for each system
-- Logs show when systems are paused or stopped
+**AHA Training Automation:**
+1. Click **"Start AHA Automation"**  
+2. Automated browser navigates platform → Completes registration forms → Submits data
+3. Monitor progress in Logs tab
 
-### Running in the Background
-
-- Click the **minimize to tray** button to run in the background
-- The app continues running and shows notifications
-- Right-click the system tray icon for quick access
-
-### Acuity Registration Flipping
-
-Flip Acuity Registration status from "No" to "Yes" using one of three methods:
-
-**1. Email-Triggered (Automatic)**
-- Set `AUTO_FLIP_ACUITY_REGISTRATION=true` in `.env`
-- Flips automatically when processing emails
-
-**2. Scheduled Checking (Time-Based)**
-- Set `AUTO_FLIP_CHECK_INTERVAL_MINUTES=5` in `.env`
-- Compares AHA sheet vs RQI sheet every X minutes
-- Run standalone: `python registration_scheduler.py`
-
-**3. Manual (On-Demand)**
-```bash
-# Flip single person
+**Controls:**
+- Pause/resume each automation independently
+- Run minimized via system tray with desktop notifications
+- Right-click tray icon for quick access menu
 python manual_flip_registration.py --first-name John --last-name Doe
 
 # Batch flip from CSV (FirstName,LastName columns)
@@ -248,37 +203,20 @@ If you want to distribute the app without requiring Python installation:
 4. **Find your executable:**
    - **Output location:** `dist/CSC131_Automation/`
    - The folder contains the executable and all required files
-   - You can distribute this entire folder
+To distribute without requiring Python installation:
 
-### What Gets Bundled
-
-The executable includes:
-- All Python dependencies
-- Configuration files (`.env`, service account JSONs)
-- GUI assets and icons
-- Required libraries (ttkbootstrap, playwright, msal, etc.)
-
-> **Important**: The `.env` and JSON credential files are bundled into the executable. Make sure they contain the correct credentials before building.
-
-<details>
-<summary>📝 Advanced: Manual PyInstaller Build Commands</summary>
-
-If you need to customize the build process, use these manual commands:
-
-**Mac/Linux:**
 ```bash
-pyinstaller --onefile --windowed Proper_MS/master_control.py \
---name "CSC131_Automation" --icon icon.png \
---paths Proper_MS --paths RQI_EmailSheets --paths Scheduling \
---add-data "service_account.json:." --add-data "google_sheet_api_key.json:." \
---add-data ".env:." --add-data "icon.png:." \
---collect-submodules RQI_EmailSheets --collect-submodules Proper_MS \
---collect-submodules Scheduling --collect-all ttkbootstrap --collect-all playwright \
---hidden-import msal --hidden-import pystray --hidden-import PIL \
---hidden-import gspread --hidden-import requests --hidden-import dotenv \
---hidden-import google.oauth2.service_account
+pyinstaller master_control.spec --clean
 ```
 
+Output: `dist/CSC131_Automation/` (distribute entire folder)
+
+**What's Bundled:**
+- All Python dependencies and libraries
+- Configuration files (`.env`, service account JSONs, GUI assets)
+- Playwright browsers
+
+> **⚠️ Security**: Credential files are bundled into the executable and can be extracted. Only distribute to trusted users
 **Windows:**
 ```powershell
 pyinstaller --onefile --windowed Proper_MS\master_control.py `
@@ -333,23 +271,23 @@ CSC131_Project/
 ├── Scheduling/            # AHA training automation module
 │   ├── scheduling.py      # Web automation with Playwright
 │   └── apikey.json        # AHA API configuration
-│
-├── scripts/               # Setup and installation scripts
-│   ├── setup.sh          # macOS/Linux setup
-│   └── setup.ps1         # Windows PowerShell setup
-│
-├── .env                   # Environment variables (create this)
-├── service_account.json   # Google Sheets credentials (add this)
-├── google_sheet_api_key.json  # Google API key (add this)
-└── master_control.spec    # PyInstaller build configuration
-```
+**Email Processing Workflow:**
+1. Monitors Outlook inbox via Microsoft Graph API
+2. Parses emails matching configured criteria  
+3. Extracts lead data (names, dates, course details)
+4. Appends to Google Sheets via service account
+5. Creates calendar events for important dates
 
-## 🐛 Troubleshooting
+**AHA Automation Workflow:**
+1. Launches headless Playwright browser
+2. Navigates to AHA training platform
+3. Fills registration forms with course data
+4. Submits and confirms completion
 
-### Common Issues
-
-**Problem: Virtual environment activation fails**
-- **Solution**: Make sure Python 3.8+ is installed. Try recreating the venv:
+**GUI Controls:**
+- Independent start/stop for each automation system
+- Continuous monitoring cycles (configurable intervals)
+- System tray for background operation with notificationsnv:
   ```bash
   python3 -m venv .venv
   ```
@@ -380,52 +318,26 @@ CSC131_Project/
   ```bash
   playwright install
   ```
+| Issue | Solution |
+|-------|----------|
+| **Virtual environment fails** | Ensure Python 3.8+ installed: `python3 -m venv .venv` |
+| **Module not found** | Activate venv and reinstall: `pip install -r requirements.txt` |
+| **Microsoft auth fails** | Verify CLIENT_ID/TENANT_ID, check Azure API permissions, delete `.token_cache` and retry |
+| **Sheets not updating** | Verify `service_account.json` in project root, confirm service account has edit access, check SPREADSHEET_ID/WORKSHEET_NAME |
+| **Playwright fails** | Run `playwright install` with venv activated |
+| **GUI won't open** | Linux: `sudo apt-get install python3-tk`<br>Check terminal for errors |
+| **No system tray icon** | macOS: Grant accessibility permissions<br>Windows: Enable system tray icons<br>Linux: Check desktop environment tray support |
 
-**Problem: GUI doesn't open**
-- **Solution**: 
-  - On Linux, ensure tkinter is installed: `sudo apt-get install python3-tk`
-  - Verify you're using `--windowed` flag in PyInstaller for GUI apps
-  - Check for error messages in the terminal
-
-**Problem: System tray icon not appearing**
-- **Solution**:
-  - macOS: Grant accessibility permissions in System Preferences
-  - Windows: Check if system tray icons are enabled in taskbar settings
-  - Linux: Some desktop environments require additional tray support
-
-### Getting Help
-
-- Check the **Logs tab** in the application for detailed error messages
-- Review the terminal output when running in development mode
-- Ensure all prerequisites are met and credentials are configured correctly
-
-## 📄 Dependencies
-
-Main Python packages used:
-- `ttkbootstrap` - Modern themed tkinter GUI
-- `playwright` - Web automation framework
-- `msal` - Microsoft authentication library
-- `gspread` - Google Sheets API client
-- `pystray` - System tray integration
-- `python-dotenv` - Environment variable management
-- `Pillow` - Image processing for icons
+**Getting Help:** Check Logs tab for detailed errors, review terminal output, verify all credentials are configured- **ttkbootstrap** - Modern themed GUI framework
+- **playwright** - Web automation
+- **msal** - Microsoft authentication  
+- **gspread** - Google Sheets API
+- **pystray** - System tray integration
+- **python-dotenv** - Environment variable management
+- **Pillow** - Icon image processing
 
 ## 🔐 Security Notes
 
-- **Never commit** `.env`, `service_account.json`, or `google_sheet_api_key.json` to version control
-- These files contain sensitive credentials
-- Add them to `.gitignore`
-- OAuth tokens are cached locally - keep `.token_cache` secure
-- When distributing executables, be aware that bundled credentials can be extracted
-
-## 📝 License
-
-This project was created for CSC131 coursework.
-
-## 🤝 Contributing
-
-This is an academic project. For improvements or issues, please contact the development team.
-
----
-
-**Built with ❤️ for CSC131**
+- Add `.env`, `service_account.json`, `google_sheet_api_key.json`, and `.token_cache` to `.gitignore`
+- Never commit credential files to version control
+- Bundled executables contain extractable credentials - distribute only to trusted users
