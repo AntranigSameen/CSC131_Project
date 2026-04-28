@@ -780,11 +780,11 @@ class SettingsWindow(QMainWindow):
         self._build_email_tab()                                                                                                       # Email settings page
         self._build_sheets_tab()                                                                                                      # Google Sheets settings page
         self._build_auth_tab()                                                                                                        # Microsoft authentication settings page
-        self._build_general_tab()                                                                                                     # General settings page
         self._build_reminder_emails_tab()                                                                                             # Reminder Emails page
         self._build_location_keys_tab()                                                                                               # Location key mapping page
         self._build_location_templates_tab()                                                                                          # Location email template editor page
         self._build_location_tracker_tab()                                                                                            # Location email tracker audit page
+        self._build_general_tab()                                                                                                     # General settings page
         self._build_logs_tab()                                                                                                        # Live logs page
 
         if self.sidebar_buttons:
