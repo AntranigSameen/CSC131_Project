@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, QTimer, QSize, QRect, QPropertyAnimation, QEasing
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
-                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget,)
+                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, QCheckBox,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 from location_keys import (
@@ -782,6 +782,7 @@ class SettingsWindow(QMainWindow):
         self._build_auth_tab()                                                                                                        # Microsoft authentication settings page
         self._build_general_tab()                                                                                                     # General settings page
         self._build_reminder_emails_tab()                                                                                             # Reminder Emails page
+        self._build_manual_emailer_tab()                                                                                              # Manual Email Sender page
         self._build_location_keys_tab()                                                                                               # Location key mapping page
         self._build_location_templates_tab()                                                                                          # Location email template editor page
         self._build_location_tracker_tab()                                                                                            # Location email tracker audit page
@@ -1162,6 +1163,339 @@ class SettingsWindow(QMainWindow):
         layout.addStretch(1)                                                                                                          # Push reminder email controls upward so page feels tidy
 
         self._add_sidebar_page(ScrollablePage(page), "Reminder Emails", "⏰")                                                         # Add Reminder Emails page to sidebar navigation
+
+    # ==================
+    # MANUAL EMAILER TAB
+    # ==================
+
+    def _build_manual_emailer_tab(self):
+        from manual_email_handler import get_available_locations
+        
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)
+
+        title = QLabel("Manual Email Sender")
+        title.setObjectName("SectionTitle")
+
+        subtitle = QLabel(
+            "Send individual emails manually while preventing duplicate auto-emailer sends. "
+            "Sent emails are tracked automatically to prevent the auto-emailer from sending to the same person."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setObjectName("SectionSubtitle")
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        # === Single Email Form ===
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.manual_email_input = QLineEdit()
+        self.manual_email_input.setPlaceholderText("recipient@example.com")
+        form.addRow("Email Address*", self.manual_email_input)
+
+        self.manual_location_combo = QComboBox()
+        self.manual_location_combo.setEditable(True)
+        self.manual_location_combo.setPlaceholderText("Select or type location...")
+        self._refresh_manual_location_combo()
+        form.addRow("Location*", self.manual_location_combo)
+
+        self.manual_first_name_input = QLineEdit()
+        self.manual_first_name_input.setPlaceholderText("John (optional, for personalization)")
+        form.addRow("First Name", self.manual_first_name_input)
+
+        self.manual_last_name_input = QLineEdit()
+        self.manual_last_name_input.setPlaceholderText("Doe (optional, for personalization)")
+        form.addRow("Last Name", self.manual_last_name_input)
+
+        self.manual_cycle_marker_input = QLineEdit()
+        self.manual_cycle_marker_input.setPlaceholderText("01/15/2026 (optional, for tracking)")
+        form.addRow("Cycle Marker/Date", self.manual_cycle_marker_input)
+
+        layout.addLayout(form)
+
+        # === Custom Subject/Body (Optional) ===
+        custom_section = QLabel("Custom Email Content (Optional - leave blank to use template)")
+        custom_section.setObjectName("SectionSubtitle")
+        layout.addWidget(custom_section)
+
+        self.manual_subject_input = QLineEdit()
+        self.manual_subject_input.setPlaceholderText("Leave blank to use location template...")
+        layout.addWidget(QLabel("Custom Subject:"))
+        layout.addWidget(self.manual_subject_input)
+
+        self.manual_body_input = QTextEdit()
+        self.manual_body_input.setPlaceholderText("Leave blank to use location template...")
+        self.manual_body_input.setMaximumHeight(120)
+        layout.addWidget(QLabel("Custom Body:"))
+        layout.addWidget(self.manual_body_input)
+
+        # === Update Sheet Option ===
+        self.manual_update_sheet_checkbox = QCheckBox("Update 'Reminder Email' column in sheet after sending")
+        self.manual_update_sheet_checkbox.setChecked(True)
+        layout.addWidget(self.manual_update_sheet_checkbox)
+
+        # === Action Buttons ===
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+
+        self.manual_preview_btn = QPushButton("📋 Preview Email")
+        self.manual_preview_btn.clicked.connect(self._preview_manual_email)
+        button_row.addWidget(self.manual_preview_btn)
+
+        self.manual_send_btn = QPushButton("📧 Send Email")
+        self.manual_send_btn.clicked.connect(self._send_manual_email)
+        self.manual_send_btn.setObjectName("PrimaryButton")
+        button_row.addWidget(self.manual_send_btn)
+
+        self.manual_refresh_locations_btn = QPushButton("🔄 Refresh Locations")
+        self.manual_refresh_locations_btn.clicked.connect(self._refresh_manual_location_combo)
+        button_row.addWidget(self.manual_refresh_locations_btn)
+
+        layout.addLayout(button_row)
+
+        # === Batch Upload Section ===
+        batch_section = QLabel("Batch Send (CSV File)")
+        batch_section.setObjectName("SectionSubtitle")
+        layout.addWidget(batch_section)
+
+        batch_info = QLabel("CSV format: Email,Location,FirstName,LastName,CycleMarker")
+        batch_info.setWordWrap(True)
+        layout.addWidget(batch_info)
+
+        batch_row = QHBoxLayout()
+        self.manual_csv_path_label = QLabel("No file selected")
+        batch_row.addWidget(self.manual_csv_path_label, 1)
+
+        self.manual_browse_csv_btn = QPushButton("Browse...")
+        self.manual_browse_csv_btn.clicked.connect(self._browse_manual_csv)
+        batch_row.addWidget(self.manual_browse_csv_btn)
+
+        self.manual_send_batch_btn = QPushButton("📧 Send Batch")
+        self.manual_send_batch_btn.clicked.connect(self._send_manual_batch)
+        self.manual_send_batch_btn.setEnabled(False)
+        batch_row.addWidget(self.manual_send_batch_btn)
+
+        layout.addLayout(batch_row)
+
+        # === Status Log ===
+        log_label = QLabel("Send Log:")
+        log_label.setObjectName("SectionSubtitle")
+        layout.addWidget(log_label)
+
+        self.manual_send_log = QPlainTextEdit()
+        self.manual_send_log.setReadOnly(True)
+        self.manual_send_log.setMaximumHeight(150)
+        self.manual_send_log.setPlaceholderText("Email send status will appear here...")
+        layout.addWidget(self.manual_send_log)
+
+        layout.addStretch(1)
+
+        self._add_sidebar_page(ScrollablePage(page), "Manual Emailer", "✉️")
+
+    def _refresh_manual_location_combo(self):
+        """Refresh the location dropdown with current location keys."""
+        from manual_email_handler import get_available_locations
+        
+        try:
+            self.manual_location_combo.clear()
+            locations = get_available_locations()
+            
+            for location in locations:
+                self.manual_location_combo.addItem(location)
+                
+            self._log_to_manual_send("✓ Locations refreshed")
+        except Exception as e:
+            self._log_to_manual_send(f"✗ Failed to refresh locations: {e}")
+
+    def _browse_manual_csv(self):
+        """Browse for a CSV file for batch sending."""
+        csv_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select CSV File for Batch Email Send",
+            "",
+            "CSV Files (*.csv);;All Files (*)"
+        )
+        
+        if csv_path:
+            self.manual_csv_path_label.setText(csv_path)
+            self.manual_send_batch_btn.setEnabled(True)
+            self._log_to_manual_send(f"✓ Selected: {csv_path}")
+
+    def _log_to_manual_send(self, message: str):
+        """Add a message to the manual send log."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.manual_send_log.appendPlainText(f"[{timestamp}] {message}")
+
+    def _preview_manual_email(self):
+        """Preview the email that would be sent."""
+        from manual_email_handler import compose_email_content
+        
+        try:
+            email = self.manual_email_input.text().strip()
+            location = self.manual_location_combo.currentText().strip()
+            first_name = self.manual_first_name_input.text().strip()
+            last_name = self.manual_last_name_input.text().strip()
+            custom_subject = self.manual_subject_input.text().strip()
+            custom_body = self.manual_body_input.toPlainText().strip()
+
+            if not email or "@" not in email:
+                QMessageBox.warning(self, "Invalid Email", "Please enter a valid email address.")
+                return
+
+            if not location:
+                QMessageBox.warning(self, "Missing Location", "Please select or enter a location.")
+                return
+
+            subject, body, error = compose_email_content(
+                email, location, first_name, last_name, custom_subject, custom_body
+            )
+            
+            if error:
+                QMessageBox.warning(self, "Composition Error", error)
+                return
+
+            preview_text = (
+                f"TO: {email}\n"
+                f"LOCATION: {location}\n"
+                f"SUBJECT: {subject}\n"
+                f"\n{'-' * 60}\n\n"
+                f"{body}"
+            )
+
+            preview_dialog = QDialog(self)
+            preview_dialog.setWindowTitle("Email Preview")
+            preview_dialog.resize(600, 400)
+            
+            preview_layout = QVBoxLayout(preview_dialog)
+            preview_text_widget = QPlainTextEdit()
+            preview_text_widget.setPlainText(preview_text)
+            preview_text_widget.setReadOnly(True)
+            preview_layout.addWidget(preview_text_widget)
+            
+            close_btn = QPushButton("Close")
+            close_btn.clicked.connect(preview_dialog.accept)
+            preview_layout.addWidget(close_btn)
+            
+            preview_dialog.exec()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Preview Failed", f"Could not preview email:\n{e}")
+            self._log_to_manual_send(f"✗ Preview failed: {e}")
+
+    def _send_manual_email(self):
+        """Send a single manual email."""
+        from manual_email_handler import (
+            send_single_manual_email,
+            check_if_already_sent,
+            update_reminder_email_column,
+        )
+        
+        try:
+            email = self.manual_email_input.text().strip()
+            location = self.manual_location_combo.currentText().strip()
+            first_name = self.manual_first_name_input.text().strip()
+            last_name = self.manual_last_name_input.text().strip()
+            cycle_marker = self.manual_cycle_marker_input.text().strip()
+            custom_subject = self.manual_subject_input.text().strip()
+            custom_body = self.manual_body_input.toPlainText().strip()
+            update_sheet = self.manual_update_sheet_checkbox.isChecked()
+
+            if not email or "@" not in email:
+                QMessageBox.warning(self, "Invalid Email", "Please enter a valid email address.")
+                return
+
+            if not location:
+                QMessageBox.warning(self, "Missing Location", "Please select or enter a location.")
+                return
+
+            self._log_to_manual_send(f"Sending to {email}...")
+            
+            # Check if already sent
+            already_sent, _ = check_if_already_sent(email, location, cycle_marker)
+            force_send = False
+            
+            if already_sent:
+                reply = QMessageBox.question(
+                    self,
+                    "Already Sent",
+                    f"Email to {email} for location '{location}' was already sent.\n\nSend anyway?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply != QMessageBox.Yes:
+                    self._log_to_manual_send(f"✗ Cancelled (already sent): {email}")
+                    return
+                force_send = True
+
+            # Send email
+            result = send_single_manual_email(
+                email, location, first_name, last_name, cycle_marker,
+                custom_subject, custom_body, force_send
+            )
+            
+            if result.success:
+                self._log_to_manual_send(f"✓ {result.message}")
+
+                # Update sheet if requested
+                if update_sheet:
+                    success, message = update_reminder_email_column(email)
+                    if success:
+                        self._log_to_manual_send(f"✓ {message}")
+                    else:
+                        self._log_to_manual_send(f"⚠ {message}")
+
+                QMessageBox.information(self, "Success", result.message)
+                
+                # Clear form
+                self.manual_email_input.clear()
+                self.manual_first_name_input.clear()
+                self.manual_last_name_input.clear()
+                self.manual_cycle_marker_input.clear()
+                self.manual_subject_input.clear()
+                self.manual_body_input.clear()
+            else:
+                self._log_to_manual_send(f"✗ {result.message}")
+                QMessageBox.critical(self, "Send Failed", result.message)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to send email:\n{e}")
+            self._log_to_manual_send(f"✗ Error: {e}")
+
+    def _send_manual_batch(self):
+        """Send batch emails from CSV file."""
+        from manual_email_handler import send_batch_from_csv, update_reminder_email_column
+        
+        csv_path = self.manual_csv_path_label.text()
+        if csv_path == "No file selected":
+            return
+
+        try:
+            update_sheet = self.manual_update_sheet_checkbox.isChecked()
+            
+            self._log_to_manual_send(f"=== Starting batch send from {csv_path} ===")
+            
+            stats = send_batch_from_csv(csv_path, update_sheet)
+            
+            self._log_to_manual_send(
+                f"=== Batch complete: {stats['success']} sent, "
+                f"{stats['failed']} failed, {stats['skipped']} skipped ==="
+            )
+            
+            QMessageBox.information(
+                self,
+                "Batch Complete",
+                f"Batch send complete:\n"
+                f"{stats['success']} sent\n"
+                f"{stats['failed']} failed\n"
+                f"{stats['skipped']} skipped"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(self, "Batch Failed", f"Batch send failed:\n{e}")
+            self._log_to_manual_send(f"✗ Batch error: {e}")
 
     # =========
     # LOCATION KEYS TAB

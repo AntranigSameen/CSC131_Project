@@ -198,6 +198,58 @@ python manual_flip_registration.py --batch students.csv
 python manual_flip_registration.py --scan-all
 ```
 
+### Manual Email Sender (Prevents Auto-Emailer Duplicates)
+
+When you need to send an email manually **before** the auto-emailer runs, use the **Manual Emailer** tab in the GUI to ensure the auto-emailer won't send a duplicate to the same person.
+
+**How it prevents duplicates:**
+- Uses the same tracking system as the auto-emailer
+- Records a hash (email + location + cycle marker) in `location_email_tracker.txt`
+- Auto-emailer checks this file and skips anyone already tracked
+- Optionally updates the "Reminder Email" column in your AHA sheet
+
+**Using the GUI tab:**
+1. Open the **Manual Emailer** tab from the sidebar (✉️ icon)
+2. Fill in the email, location, and optional personalization fields
+3. Click "Preview Email" to see what will be sent (uses location templates)
+4. Check "Update 'Reminder Email' column" if you want the sheet updated
+5. Click "Send Email"
+6. The email is sent and automatically tracked to prevent duplicates
+
+**Features:**
+- **Location dropdown**: Auto-populated from your configured location keys
+- **Template support**: Uses the same email templates as the auto-emailer
+- **Custom emails**: Override subject/body for one-off custom messages
+- **Batch sending**: Upload a CSV file to send to multiple people at once
+- **Sheet integration**: Automatically updates the "Reminder Email" column when sent
+- **Send log**: See real-time status of sent emails directly in the GUI
+
+**CSV batch format:**
+```csv
+Email,Location,FirstName,LastName,CycleMarker
+john.doe@example.com,Main Campus,John,Doe,01/15/2026
+jane.smith@example.com,Downtown,Jane,Smith,02/20/2026
+```
+
+**Important notes:**
+- Location must match a value in `location_keys.txt` (configure via Location Keys tab)
+- Uses the same email templates as the auto-emailer (configure via Location Templates tab)
+- GUI warns you if the person was already emailed
+- Always tracks sent emails to prevent future auto-emailer duplicates
+
+**Command-line alternative** (for advanced users):
+If you prefer command-line tools, you can also use:
+
+```bash
+# Send a single manual email (command-line)
+python Proper_MS/send_manual_email.py --email john.doe@example.com --location "Main Campus"
+
+# Batch send from CSV (command-line)
+python Proper_MS/send_manual_email.py --batch emails.csv
+```
+
+Note: The command-line tool does NOT update the "Reminder Email" column in the sheet. Use the GUI tab for full integration.
+
 ### AHA Location-Based Auto Emailer
 
 Send one email per person based on their location in the AHA sheet.
