@@ -1199,7 +1199,6 @@ class SettingsWindow(QMainWindow):
         self.manual_location_combo = QComboBox()
         self.manual_location_combo.setEditable(True)
         self.manual_location_combo.setPlaceholderText("Select or type location...")
-        self._refresh_manual_location_combo()
         form.addRow("Location*", self.manual_location_combo)
 
         self.manual_first_name_input = QLineEdit()
@@ -1291,6 +1290,8 @@ class SettingsWindow(QMainWindow):
         self.manual_send_log.setPlaceholderText("Email send status will appear here...")
         layout.addWidget(self.manual_send_log)
 
+        self._refresh_manual_location_combo()                                                                                         # Refresh location dropdown only after manual_send_log exists
+
         layout.addStretch(1)
 
         self._add_sidebar_page(ScrollablePage(page), "Manual Emailer", "✉️")
@@ -1326,6 +1327,10 @@ class SettingsWindow(QMainWindow):
 
     def _log_to_manual_send(self, message: str):
         """Add a message to the manual send log."""
+        if not hasattr(self, "manual_send_log"):                                                                                       # Avoid crashing if logging happens before the log widget is created
+            logging.info("Manual Emailer: %s", message)
+            return
+
         from datetime import datetime
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.manual_send_log.appendPlainText(f"[{timestamp}] {message}")

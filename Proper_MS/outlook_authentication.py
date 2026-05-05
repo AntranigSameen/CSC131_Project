@@ -13,10 +13,11 @@ from dotenv import load_dotenv
 
 #load_dotenv()
 
-CLIENT_ID = os.getenv("CLIENT_ID")
-AUTHORITY = os.getenv("AUTHORITY", "https://login.microsoftonline.com/consumers")
-SCOPES_RAW = os.getenv("SCOPES")
-CACHE_FILE = os.getenv("CACHE_FILE", "token_cache.json")                                            # Cache file for MSAL tokens (makes it a single sign-on experience)
+CLIENT_ID = (os.getenv("CLIENT_ID") or "").strip()                                                                                    # Azure app registration client ID
+TENANT_ID = (os.getenv("TENANT_ID") or "").strip()                                                                                    # Microsoft Entra tenant ID for organization account
+AUTHORITY = (os.getenv("AUTHORITY") or "").strip()                                                                                    # Microsoft login authority URL
+SCOPES_RAW = (os.getenv("SCOPES") or "").strip()                                                                                      # Comma-separated Microsoft Graph delegated scopes
+CACHE_FILE = (os.getenv("CACHE_FILE") or "token_cache.json").strip()                                                                  # MSAL token cache file
 
 #====================================
 # Check loaded environment variables
@@ -24,6 +25,9 @@ CACHE_FILE = os.getenv("CACHE_FILE", "token_cache.json")                        
 
 if not CLIENT_ID:
     raise ValueError("CLIENT_ID not found in environment variables")
+
+if not AUTHORITY and TENANT_ID:
+    AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"                                                                      # Build organization authority from tenant ID when AUTHORITY is not explicitly set
 
 if not SCOPES_RAW:
     raise ValueError("SCOPES not found in environment variables")
