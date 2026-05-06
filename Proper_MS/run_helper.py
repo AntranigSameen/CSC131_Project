@@ -30,22 +30,22 @@ def run_cycle(token):
             ret_date = None
 
             if not emails:
-                logging.info("No new emails found in this cycle.")                                               # Log if there are no new emails to process
+                logging.debug("No new emails found in this cycle.")                                              # Log if there are no new emails to process
 
             else:
                 name_parsed = parse_name(emails, KEYWORD_NAME)                                                   # Parse names from emails
                 if name_parsed:
                     for entry in name_parsed:
-                        logging.info("Extracted Name - Subject: %s, Value: %s", entry["Subject"], entry["Name"])
+                        logging.debug("Extracted Name - Subject: %s, Value: %s", entry["Subject"], entry["Name"])
                 else:
-                    logging.info("No names found in this cycle.")
+                    logging.debug("No names found in this cycle.")
 
                 date_parsed = parse_date(emails)                                                                 # Parse dates from emails
                 if date_parsed:
                     for entry in date_parsed:
-                        logging.info("Extracted Date - Subject: %s, Value: %s", entry["Subject"], entry["Date"])
+                        logging.debug("Extracted Date - Subject: %s, Value: %s", entry["Subject"], entry["Date"])
                 else:
-                    logging.info("No dates found in this cycle.")
+                    logging.debug("No dates found in this cycle.")
 
                 if name_parsed and date_parsed:
                     store_data(name_parsed, date_parsed)                                                         # Store extracted data in text file

@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, QTimer, QSize, QRect, QPropertyAnimation, QEasing
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
-                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, QCheckBox,)
+                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, QCheckBox, QTabWidget,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 from location_keys import (
@@ -603,7 +603,7 @@ class SettingsWindow(QMainWindow):
         self.mini_log_text = QPlainTextEdit()
         self.mini_log_text.setObjectName("MiniLogText")                                                                               # Separate styling hook for compact top log viewer
         self.mini_log_text.setReadOnly(True)                                                                                          # Prevent editing the compact log preview
-        self.mini_log_text.setLineWrapMode(QPlainTextEdit.NoWrap)                                                                     # Preserve original log line formatting
+        self.mini_log_text.setLineWrapMode(QPlainTextEdit.WidgetWidth)                                                                # Wrap friendly activity feed lines inside compact mini viewer
         self.mini_log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)                                                # Fill available space inside panel
         self.mini_log_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)                                                        # Hide horizontal scrollbar in compact preview
         self.mini_log_text.setPlaceholderText("Recent log lines will appear here...")
@@ -1328,7 +1328,7 @@ class SettingsWindow(QMainWindow):
     def _log_to_manual_send(self, message: str):
         """Add a message to the manual send log."""
         if not hasattr(self, "manual_send_log"):                                                                                       # Avoid crashing if logging happens before the log widget is created
-            logging.info("Manual Emailer: %s", message)
+            logging.debug("Manual Emailer: %s", message)
             return
 
         from datetime import datetime
@@ -1951,14 +1951,43 @@ class SettingsWindow(QMainWindow):
         layout = QVBoxLayout(page)
 
         title = QLabel("Live Application Logs")
-        self.log_text = QPlainTextEdit()
-        self.log_text.setReadOnly(True)                                                                                               # Prevent editing log viewer contents
-        self.log_text.setLineWrapMode(QPlainTextEdit.NoWrap)                                                                          # Preserve original log line formatting
+        title.setObjectName("SectionTitle")                                                                                           # Main heading for logs tab
+
+        subtitle = QLabel("Switch between separated logs for the full app, RQI, AHA, SFTP, and errors.")
+        subtitle.setObjectName("SectionSubtitle")                                                                                     # Short explanation for the horizontal log tabs
+        subtitle.setWordWrap(True)
+
+        self.log_tabs = QTabWidget()
+        self.log_tabs.setObjectName("LogTabs")                                                                                        # Horizontal tabs for switching between log files
+        self.log_tabs.currentChanged.connect(self._reset_selected_log_view)                                                           # Reload selected log from the beginning when switching tabs
+
+        self.log_viewers = {}                                                                                                         # Stores QPlainTextEdit widgets by log category
+        self.log_positions = {}                                                                                                       # Stores file read positions by log category
+
+        log_tabs = {
+            "All Logs": "app.log",
+            "RQI": "logs/rqi.log",
+            "AHA": "logs/aha.log",
+            "SFTP": "logs/sftp.log",
+            "Errors": "logs/errors.log",
+        }                                                                                                                             # Log tab label mapped to relative log file path
+
+        for tab_name, relative_path in log_tabs.items():
+            viewer = QPlainTextEdit()
+            viewer.setReadOnly(True)                                                                                                  # Prevent editing log file contents from GUI
+            viewer.setLineWrapMode(QPlainTextEdit.NoWrap)                                                                             # Keep logs aligned like normal log files
+            viewer.setPlaceholderText(f"{tab_name} log entries will appear here...")
+
+            self.log_viewers[tab_name] = viewer                                                                                       # Save viewer so refresh logic can update the selected tab
+            self.log_positions[tab_name] = 0                                                                                          # Start reading each log from beginning on first load
+
+            self.log_tabs.addTab(viewer, tab_name)                                                                                    # Add horizontal clickable tab for this log category
 
         layout.addWidget(title)
-        layout.addWidget(self.log_text)
+        layout.addWidget(subtitle)
+        layout.addWidget(self.log_tabs, 1)
 
-        self._add_sidebar_page(page, "System Logs", "🧾")                                                                            # Add live log viewer page to sidebar navigation
+        self._add_sidebar_page(page, "System Logs", "🧾")                                                                             # Add live log viewer page to sidebar navigation
 
     # =================
     # UI INTERACTIONS
@@ -2123,6 +2152,10 @@ class SettingsWindow(QMainWindow):
         self.log_timer.timeout.connect(self._update_logs)                                                                             # Refresh live log viewer
         self.log_timer.start(3000)                                                                                                    # Every 3 seconds
 
+        self.mini_log_timer = QTimer(self)
+        self.mini_log_timer.timeout.connect(self._update_mini_logs)                                                                   # Refresh the cleaned mini activity feed
+        self.mini_log_timer.start(3000)                                                                                               # Update every 3 seconds
+
         self.rqi_status_timer = QTimer(self)
         self.rqi_status_timer.timeout.connect(self._update_rqi_csv_sftp_status)                                                       # Refresh current batch window countdown and last upload information
         self.rqi_status_timer.start(1000)                                                                                             # Every 1 second so countdown feels live and responsive
@@ -2131,6 +2164,7 @@ class SettingsWindow(QMainWindow):
         self._update_login_status()                                                                                                   # Initial login refresh on startup
         self._update_logs()                                                                                                           # Initial log refresh on startup
         self._update_rqi_csv_sftp_status()                                                                                            # Initial CSV batch window / upload status refresh on startup
+        self._update_mini_logs()                                                                                                      # Initial mini activity feed refresh on startup
         self._update_pause_controls()                                                                                                 # Initial pause button/menu refresh on startup
 
     def _update_pause_controls(self):
@@ -2356,77 +2390,144 @@ class SettingsWindow(QMainWindow):
         for line in lines:
             self._append_mini_log_line(line)                                                                                          # Append each compact log line with color formatting
 
-    def _update_mini_logs(self):
-        current_log_file = log_file()                                                                                                 # Current live application log path
+    def _append_colored_log_line(self, viewer, line):
+        cursor = viewer.textCursor()
+        cursor.movePosition(QTextCursor.End)                                                                                          # Move cursor to the bottom before adding the new line
 
-        if not os.path.exists(current_log_file):
-            self.mini_log_text.clear()                                                                                                # Clear compact viewer when no log file exists
+        fmt = QTextCharFormat()
+        lower_line = line.lower()                                                                                                     # Lowercase copy makes category matching easier
+
+        if "error" in lower_line or "failed" in lower_line or "exception" in lower_line or "traceback" in lower_line or "⚠" in line:
+            fmt.setForeground(QColor("#e64e30"))                                                                                    # Red for errors, failures, exceptions, and warnings
+
+        elif "[rqi]" in lower_line or "rqi" in lower_line or "appended row to sheet" in lower_line or "appended row to csv" in lower_line:
+            fmt.setForeground(QColor("#3498db"))                                                                                    # Blue for RQI activity
+
+        elif "[sftp]" in lower_line or "sftp" in lower_line or "csv uploaded" in lower_line or "uploaded csv to sftp" in lower_line:
+            fmt.setForeground(QColor("#00bc8c"))                                                                                    # Green for SFTP upload activity
+
+        elif "[aha]" in lower_line or "aha" in lower_line or "automation task" in lower_line or "worker starting" in lower_line or "worker completed" in lower_line:
+            fmt.setForeground(QColor("#f39c12"))                                                                                    # Orange/yellow for AHA automation activity
+
+        elif "[app]" in lower_line or "opening settings" in lower_line or "application started" in lower_line or "exiting application" in lower_line:
+            fmt.setForeground(QColor("#d8dee9"))                                                                                    # Light gray for app/general activity
+
+        else:
+            fmt.setForeground(QColor("#d8dee9"))                                                                                    # Default light gray for general messages
+
+        cursor.insertText(line + "\n", fmt)                                                                                           # Add the line using the selected color
+        viewer.setTextCursor(cursor)                                                                                                  # Apply cursor back to the viewer
+
+    def _update_mini_logs(self):
+        log_path = log_file()                                                                                                         # Read from main app log for the mini dashboard feed
+
+        if not os.path.exists(log_path):
+            self.mini_log_text.setPlainText("Waiting for activity...")                                                                # Friendly empty state before log file exists
             return
 
         try:
-            with open(current_log_file, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()                                                                                                 # Read all lines so we can show only the newest ones
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()[-250:]                                                                                          # Read only recent log lines so mini viewer stays fast
 
-            recent_lines = lines[-8:]                                                                                                 # Show only the last few log lines in compact viewer
+            friendly_lines = []
 
-            self.mini_log_text.clear()                                                                                                # Rebuild compact log viewer fresh on each refresh
-            self._append_mini_log_text("".join(recent_lines))                                                                         # Insert recent lines with INFO/WARNING/ERROR colors
+            for line in lines:
+                clean_line = self._format_mini_log_line(line)                                                                         # Convert raw technical log line into dashboard-friendly text
+                if clean_line:
+                    friendly_lines.append(clean_line)
 
-            scrollbar = self.mini_log_text.verticalScrollBar()
-            scrollbar.setValue(scrollbar.maximum())                                                                                   # Keep compact viewer pinned to newest lines
+            friendly_lines = friendly_lines[-7:]                                                                                      # Show only the last few meaningful events
+
+            self.mini_log_text.clear()                                                                                                # Clear old mini feed before rewriting color-coded activity lines
+
+            if friendly_lines:
+                for friendly_line in friendly_lines:
+                    self._append_colored_log_line(self.mini_log_text, friendly_line)                                                  # Add each dashboard event using category-based color
+            else:
+                self.mini_log_text.setPlainText("No recent important activity.")                                                      # Friendly message when only noisy logs exist
+
+            self.mini_log_text.moveCursor(QTextCursor.End)                                                                            # Keep newest activity visible
 
         except Exception as e:
-            logging.exception("Error updating mini log viewer: %s", e)
+            self.mini_log_text.setPlainText(f"Could not read activity feed:\n{e}")                                                    # Show readable error instead of crashing GUI
 
-    def _update_logs(self):
-        current_log_file = log_file()                                                                                                 # Current live application log path
+    def _get_selected_log_path(self):
+        if not hasattr(self, "log_tabs"):
+            return log_file()                                                                                                         # Fallback to main app log before log tabs exist
 
-        if not os.path.exists(current_log_file):
-            if hasattr(self, "mini_log_text"):
-                self.mini_log_text.clear()                                                                                            # Clear compact log viewer if no log file exists yet
-            return                                                                                                                    # Do nothing if log file does not exist yet
+        current_tab = self.log_tabs.tabText(self.log_tabs.currentIndex())                                                             # Get selected horizontal log tab name
+
+        log_paths = {
+            "All Logs": log_file(),
+            "RQI": os.path.join(base_dir(), "logs", "rqi.log"),
+            "AHA": os.path.join(base_dir(), "logs", "aha.log"),
+            "SFTP": os.path.join(base_dir(), "logs", "sftp.log"),
+            "Errors": os.path.join(base_dir(), "logs", "errors.log"),
+        }                                                                                                                             # Runtime paths for each separated log file
+
+        return log_paths.get(current_tab, log_file())                                                                                 # Default to main app log if selected tab is unknown
+
+    def _reset_selected_log_view(self):
+        if not hasattr(self, "log_tabs"):
+            return                                                                                                                    # Log tabs not created yet
+
+        current_tab = self.log_tabs.tabText(self.log_tabs.currentIndex())                                                             # Selected horizontal log tab
+        self.log_positions[current_tab] = 0                                                                                           # Force selected tab to reload from the beginning
+
+        if current_tab in self.log_viewers:
+            self.log_viewers[current_tab].clear()                                                                                     # Clear old text before loading selected log file
+
+        self._update_logs()                                                                                                           # Immediately populate newly selected log tab
+
+    def _format_mini_log_line(self, line):
+        if "DASHBOARD:" not in line and "ERROR" not in line:
+            return None                                                                                                               # Mini viewer only shows intentional dashboard events and errors
 
         try:
-            current_size = os.path.getsize(current_log_file)                                                                          # File size used to detect truncation/reset
+            time_part = line.split(" - ", 1)[0].split(" ")[1][:8]                                                                     # Extract HH:MM:SS from timestamp
+            message = line.split(" - ", 2)[2].strip()                                                                                 # Extract log message
+        except Exception:
+            return None                                                                                                               # Ignore malformed lines safely
 
-            # If log file was truncated or recreated, reset viewer state
-            if current_size < self._log_position:
-                self._log_position = 0                                                                                                # Start reading from top again
-                self._log_initialized = False                                                                                         # Force full reload on next read
-                self.log_text.clear()                                                                                                 # Clear old displayed logs
+        if "DASHBOARD:" in message:
+            clean_message = message.split("DASHBOARD:", 1)[1].strip()                                                                 # Remove dashboard prefix for cleaner GUI display
+            return f"{time_part}  •  {clean_message}"
 
-            was_near_bottom = self._is_log_near_bottom()                                                                              # Decide whether to auto-scroll after append
+        return f"{time_part}  •  ⚠ {message}"                                                                                        # Always show errors in mini viewer
 
-            with open(current_log_file, "r", encoding="utf-8", errors="replace") as f:
-                # First load: read entire file once
-                if not self._log_initialized:
-                    content = f.read()                                                                                                # Read complete log file on first load
-                    self.log_text.clear()
-                    self._append_log_text(content)
-                    self._log_position = f.tell()                                                                                     # Save current end position
-                    self._log_initialized = True                                                                                      # Mark log viewer as initialized
+    def _update_logs(self):
+        if not hasattr(self, "log_tabs"):
+            return                                                                                                                    # Log tabs not ready yet
 
-                    scrollbar = self.log_text.verticalScrollBar()
-                    scrollbar.setValue(scrollbar.maximum())                                                                           # Scroll to bottom after initial full load
+        current_tab = self.log_tabs.tabText(self.log_tabs.currentIndex())                                                             # Selected log category
+        viewer = self.log_viewers.get(current_tab)
 
-                else:
-                    # Subsequent loads: append only new content
-                    f.seek(self._log_position)                                                                                        # Jump to last-read position
-                    new_text = f.read()                                                                                               # Read only newly added log text
+        if viewer is None:
+            return                                                                                                                    # No viewer exists for selected tab
 
-                    if new_text:
-                        self._append_log_text(new_text)
+        selected_log_path = self._get_selected_log_path()                                                                             # Get file path for selected log category
 
-                        if was_near_bottom:
-                            scrollbar = self.log_text.verticalScrollBar()
-                            scrollbar.setValue(scrollbar.maximum())                                                                   # Keep following logs if user was already near bottom
+        if not os.path.exists(selected_log_path):
+            viewer.setPlainText("No log file found yet.")                                                                             # Show friendly message if selected log has not been created
+            self.log_positions[current_tab] = 0
+            return
 
-                    self._log_position = f.tell()                                                                                     # Save updated read position
+        try:
+            with open(selected_log_path, "r", encoding="utf-8", errors="ignore") as f:
+                f.seek(self.log_positions.get(current_tab, 0))                                                                        # Continue reading from last position for this tab
+                new_text = f.read()                                                                                                   # Read only newly added log text
+                self.log_positions[current_tab] = f.tell()                                                                            # Save new read position for this tab
+
+            if new_text:
+                viewer.moveCursor(QTextCursor.End)                                                                                    # Append new text at the end
+                
+                for line in new_text.splitlines():
+                    self._append_colored_log_line(viewer, line)                                                                       # Add full log lines with category/error colors
+                
+                viewer.moveCursor(QTextCursor.End)                                                                                    # Auto-scroll selected log tab to newest entry
 
         except Exception as e:
-            logging.exception("Error updating log viewer: %s", e)
-
-        self._update_mini_logs()
+            viewer.setPlainText(f"Could not read log file:\n{e}")                                                                     # Show readable error instead of crashing GUI
 
     # =======
     # STYLES
@@ -2597,6 +2698,32 @@ class SettingsWindow(QMainWindow):
                 color: #bfc5d2;
                 font-size: 12px;
                 font-weight: 600;
+            }
+            
+            QTabWidget::pane {
+                border: 1px solid #333842;
+                border-radius: 10px;
+                background-color: #1b1c1f;
+                margin-top: 6px;
+            }
+
+            QTabBar::tab {
+                background-color: #25272c;
+                color: white;
+                padding: 8px 16px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 4px;
+            }
+
+            QTabBar::tab:selected {
+                background-color: #00bc8c;
+                color: white;
+                font-weight: 700;
+            }
+
+            QTabBar::tab:hover {
+                background-color: #3498db;
             }
 
             QPushButton#BrowseButton {

@@ -36,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from Proper_MS.outlook_authentication import authenticate
 from Proper_MS.utils import resource_path, writable_env_file
 from Proper_MS.acuity_registration import update_aha_registration_status
+from Proper_MS.dashboard_events import dashboard_event
 
 # --------------------------------------------------------------------
 # Environment Variables
@@ -331,6 +332,7 @@ def upload_csv_to_sftp(csv_path: Path, mark_uploaded: bool = True) -> str:
 
         sftp.put(str(csv_path), remote_file_full_path)                                                                                # Upload local CSV file to configured SFTP destination
         logging.info("Uploaded CSV to SFTP: %s -> %s", csv_path, remote_file_full_path)
+        dashboard_event(f"[SFTP] CSV uploaded to SFTP: {remote_file_full_path}")                                                             # Mini dashboard event for successful SFTP upload
 
         _last_uploaded_local_path = str(csv_path)                                                                                     # Save most recent successfully uploaded local CSV path for GUI display
         _last_uploaded_remote_path = remote_file_full_path                                                                            # Save most recent successful remote SFTP destination for GUI display
@@ -386,6 +388,7 @@ def generate_csv_now(headers: Optional[List[str]] = None) -> Path:
     effective_headers = headers or list(DEFAULT_HEADERS)                                                                              # Use caller-provided headers or default lead export headers
     csv_path = _ensure_current_batch_files(effective_headers)                                                                         # Create current batch folder/CSV immediately when requested
     logging.info("Generated current CSV batch on demand: %s", csv_path)
+    dashboard_event("[RQI] Manual CSV batch generated")                                                                                     # Mini dashboard event for manual CSV generation
     return csv_path
 
 
@@ -421,6 +424,7 @@ def refresh_upload_window(headers: Optional[List[str]] = None) -> Path:
 
     csv_path = _ensure_current_batch_files(effective_headers, force_new_batch=True)                                                   # Create a new upload-window folder and CSV immediately
     logging.info("Upload window refreshed. New batch starts now: %s", csv_path)
+    dashboard_event("[RQI] Upload window refreshed and new CSV batch started")                                                        # Mini dashboard event for upload window refresh
     return csv_path
 
 
@@ -1130,7 +1134,7 @@ def setup_logging():
         handlers=[logging.FileHandler(log_file, encoding="utf-8"),
                   logging.StreamHandler(sys.stdout)],
     )
-    logging.info("Logging initialized. Log file: %s", log_file)
+    logging.debug("Logging initialized. Log file: %s", log_file)
 
 
 def get_worksheet():
@@ -1151,11 +1155,11 @@ def get_worksheet():
     gc = gspread.authorize(creds)
 
     sh = gc.open_by_key(SPREADSHEET_ID)
-    logging.info("Successfully opened spreadsheet: %s", sh.title)
+    logging.debug("Successfully opened spreadsheet: %s", sh.title)
 
     try:
         ws = sh.worksheet(WORKSHEET_NAME)
-        logging.info("Found worksheet: %s", WORKSHEET_NAME)
+        logging.debug("Found worksheet: %s", WORKSHEET_NAME)
     except gspread.WorksheetNotFound:
         logging.info("Creating new worksheet: %s", WORKSHEET_NAME)
         ws = sh.add_worksheet(title=WORKSHEET_NAME, rows=1000, cols=20)
@@ -1218,13 +1222,13 @@ def list_all_mail_folders(token: str) -> List[Dict[str, Any]]:
         data = graph_get(token, url, params=params)
         folders = data.get("value", []) or []
 
-        logging.info("=== Available Mail Folders ===")
+        logging.debug("=== Available Mail Folders ===")
         for folder in folders:
             name = folder.get("displayName", "Unknown")
             unread = folder.get("unreadItemCount", 0)
             total = folder.get("totalItemCount", 0)
             folder_id = folder.get("id", "")
-            logging.info("  Folder %s: %s unread / %s total (ID: %s...)", name, unread, total, folder_id[:20])
+            logging.debug("  Folder %s: %s unread / %s total (ID: %s...)", name, unread, total, folder_id[:20])
 
         return folders
     except Exception as e:
@@ -1249,7 +1253,7 @@ def fetch_unread_messages(token: str, limit: int = 25) -> List[Dict[str, Any]]:
     data = graph_get(token, url, params=params)
     msgs = data.get("value", []) or []
 
-    logging.info("Total unread messages found (before sender filter): %d", len(msgs))
+    logging.debug("Total unread messages found (before sender filter): %d", len(msgs))
 
     def sender_addr(m: Dict[str, Any]) -> str:
         return (m.get("from", {}) or {}).get("emailAddress", {}).get("address", "") or ""
@@ -1257,11 +1261,11 @@ def fetch_unread_messages(token: str, limit: int = 25) -> List[Dict[str, Any]]:
     for i, m in enumerate(msgs, 1):
         sender = sender_addr(m)
         subject = m.get("subject", "")
-        logging.info("  #%d From=%s | Subject=%s", i, sender, subject)
+        logging.debug("  #%d From=%s | Subject=%s", i, sender, subject)
 
     if SENDER_EMAILS:
         msgs = [m for m in msgs if sender_addr(m).lower() in SENDER_EMAILS]
-        logging.info("Found %d unread message(s) from configured sender list", len(msgs))
+        logging.debug("Found %d unread message(s) from configured sender list", len(msgs))
     else:
         logging.info("Found %d unread message(s) across all folders", len(msgs))
 
@@ -1292,7 +1296,7 @@ def create_calendar_event(token: str, email_body: str, lead_name: str = "", lead
     """
     try:
         appointment = extract_appointment_fields(email_body)
-        logging.info(
+        logging.debug(
             "Appointment extraction: For='%s' What='%s' When='%s' Where='%s'",
             appointment["for_name"],
             appointment["what"],
@@ -1418,13 +1422,13 @@ def main():
     if PROVIDER != "outlook":
         raise RuntimeError("EMAIL_PROVIDER must be 'outlook' (this script is Outlook-only).")
 
-    logging.info("Starting Outlook(Graph) -> Sheets processing...")
+    logging.debug("Starting Outlook(Graph) -> Sheets processing...")
 
     ws = get_worksheet()
     sheet_headers = ws.row_values(1)
     if not sheet_headers:
         sheet_headers = DEFAULT_HEADERS
-    logging.info("Using worksheet headers for mapping: %s", sheet_headers)
+    logging.debug("Using worksheet headers for mapping: %s", sheet_headers)
 
     removed_rows = cleanup_corrupt_rows(ws, sheet_headers)
     if removed_rows:
@@ -1441,13 +1445,13 @@ def main():
         user_data = graph_get(token, user_url, params={"$select": "mail,userPrincipalName,displayName"})
         user_email = user_data.get("mail") or user_data.get("userPrincipalName", "Unknown")
         user_name = user_data.get("displayName", "")
-        logging.info("Authenticated user: %s (%s)", user_name, user_email)
+        logging.debug("Authenticated user: %s (%s)", user_name, user_email)
         print(f"✓ Logged in as: {user_email}")
     except Exception as e:
         logging.warning("Could not fetch user profile: %s", e)
 
     msgs = fetch_unread_messages(token, limit=50)
-    logging.info("Found %d unread messages", len(msgs))
+    logging.debug("Found %d unread messages", len(msgs))
 
     if SENDER_EMAILS:
         print(f"Found {len(msgs)} unread messages (sender filter={SENDER_EMAILS!r})")
@@ -1468,10 +1472,10 @@ def main():
             body_text = msg.get("bodyPreview") or ""
 
         fields = _sanitize_fields(extract_fields(body_text))
-        logging.info("Extracted fields from msg %s: %s", msg_id, fields)
+        logging.debug("Extracted fields from msg %s: %s", msg_id, fields)
         logging.debug("Raw email body (first 500 chars): %s", body_text[:500] if body_text else "(empty)")
         non_empty_fields = {k: v for k, v in fields.items() if v}
-        logging.info("Non-empty extracted fields: %s", non_empty_fields)
+        logging.debug("Non-empty extracted fields: %s", non_empty_fields)
         appointment = extract_appointment_fields(body_text)
 
         # Process all emails including Acuity appointment emails for RQI sheet data extraction
@@ -1485,7 +1489,7 @@ def main():
                 fields["FirstName"] = parts[0]
                 if len(parts) > 1:
                     fields["LastName"] = parts[1]
-                logging.info("Applied name fallback from appointment field for msg %s: %s", msg_id, appointment_name)
+                logging.debug("Applied name fallback from appointment field for msg %s: %s", msg_id, appointment_name)
 
         # LocationName always comes from appointment "What" text.
         # Example: "Online BLS ... (CPR Lifeline, Nashville, Film House)" -> "Film House"
@@ -1521,7 +1525,7 @@ def main():
 
             if location_candidate:
                 fields["LocationName"] = location_candidate
-                logging.info(
+                logging.debug(
                     "Set LocationName from appointment What field for msg %s: %s",
                     msg_id,
                     location_candidate,
@@ -1529,7 +1533,7 @@ def main():
 
             if group_course:
                 fields["Group"] = f"HeartCode {group_course} Online - 2025"
-                logging.info(
+                logging.debug(
                     "Set Group from appointment What field for msg %s: %s",
                     msg_id,
                     fields["Group"],
@@ -1538,7 +1542,7 @@ def main():
         # Ensure Status is populated for rows appended from processed emails.
         if not (fields.get("Status") or "").strip():
             fields["Status"] = "Active"
-            logging.info("Set default Status=Active for msg %s", msg_id)
+            logging.debug("Set default Status=Active for msg %s", msg_id)
 
         try:
             persist_email_snapshot_to_env(
@@ -1563,9 +1567,11 @@ def main():
         try:
             ws.append_row(row, value_input_option="RAW")
             logging.info("Appended row to sheet for message subject: %s", subject)
+            dashboard_event(f"[RQI] added email '{subject}' to Google Sheets")                                                          # Mini dashboard event for successful RQI sheet write
 
             append_row_to_current_csv(row, sheet_headers)                                                                             # Append the same processed lead row into the active CSV batch for SFTP upload
             logging.info("Appended row to current CSV batch for message subject: %s", subject)
+            dashboard_event(f"[RQI] added email '{subject}' to the current CSV batch")                                                  # Mini dashboard event for successful CSV batch write
         except Exception as e:
             logging.error("Failed to append row to sheet: %s", e)
             print(f"✗ Failed to append row / subject: {subject} / from: {sender}")
@@ -1595,7 +1601,7 @@ def main():
                         trigger_last_name,
                     )
                 else:
-                    logging.info(
+                    logging.debug(
                         "AHA registration update found no matching No->Yes change for email=%s name=%s %s",
                         trigger_email,
                         trigger_first_name,

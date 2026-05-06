@@ -16,7 +16,7 @@ def mark_emails_seen(token, emails):
         try:
             email_id =email.get("id")
             if not email_id:
-                logging.info("No new emails found")                                                         # Log if there are no new emails to mark as read
+                logging.debug("No new emails found")                                                         # Log if there are no new emails to mark as read
                 continue
 
             url = f"https://graph.microsoft.com/v1.0/me/messages/{email_id}"

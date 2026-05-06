@@ -209,12 +209,12 @@ def update_aha_registration_status(
         return False
     
     ws = _get_aha_gsheet_worksheet(worksheet_name)
-    logging.info("AHA sync using worksheet: %s", ws.title)
+    logging.debug("AHA sync using worksheet: %s", ws.title)
 
     input_first = _normalize_name_token(first_name)
     input_last = _normalize_name_token(last_name)
     if not input_first or not input_last:
-        logging.info("AHA sync skipped: missing required first/last input name")
+        logging.debug("AHA sync skipped: missing required first/last input name")
         return False
 
     headers = ws.row_values(1)
@@ -275,7 +275,7 @@ def update_aha_registration_status(
             continue
 
         current_acuity = (row[acuity_col - 1] if len(row) >= acuity_col else "").strip().lower()
-        logging.info(
+        logging.debug(
             "AHA sync matched row=%s name=%s %s current_acuity=%r",
             row_idx,
             input_first,
@@ -288,10 +288,10 @@ def update_aha_registration_status(
             logging.info("AHA sync flipped row %s Acuity Regristration from No to Yes", row_idx)
             return True
 
-        logging.info("AHA sync found match but no flip needed on row %s", row_idx)
+        logging.debug("AHA sync found match but no flip needed on row %s", row_idx)
         return False
 
-    logging.info("AHA sync found no matching row for name=%s %s", input_first, input_last)
+    logging.debug("AHA sync found no matching row for name=%s %s", input_first, input_last)
     return False
 
 
@@ -351,10 +351,10 @@ def _get_rqi_registered_names(rqi_worksheet_name=None):
                     ws = sheet
                     break
             if ws is None:
-                logging.info("No RQI worksheet found for auto-flip checking")
+                logging.debug("No RQI worksheet found for auto-flip checking")
                 return set()
         
-        logging.info(f"Scanning RQI worksheet: {ws.title}")
+        logging.debug(f"Scanning RQI worksheet: {ws.title}")
         
         headers = ws.row_values(1)
         header_index = {_normalize_header(h): idx + 1 for idx, h in enumerate(headers)}
@@ -374,7 +374,7 @@ def _get_rqi_registered_names(rqi_worksheet_name=None):
                 break
         
         if not first_name_col or not last_name_col:
-            logging.info("RQI sheet missing name columns for auto-flip checking")
+            logging.debug("RQI sheet missing name columns for auto-flip checking")
             return set()
         
         # Collect all names from RQI sheet
@@ -394,7 +394,7 @@ def _get_rqi_registered_names(rqi_worksheet_name=None):
                 if first_norm and last_norm:
                     registered_names.add((first_norm, last_norm))
         
-        logging.info(f"Found {len(registered_names)} registered names in RQI sheet")
+        logging.debug(f"Found {len(registered_names)} registered names in RQI sheet")
         return registered_names
         
     except Exception as e:
@@ -423,12 +423,12 @@ def scan_and_flip_pending_registrations(worksheet_name=None, rqi_worksheet_name=
     # Get registered names from RQI sheet
     registered_names = _get_rqi_registered_names(rqi_worksheet_name)
     if not registered_names:
-        logging.info("No registered names found in RQI sheet, skipping scan")
+        logging.debug("No registered names found in RQI sheet, skipping scan")
         return 0
     
     # Get AHA worksheet
     ws = _get_aha_gsheet_worksheet(worksheet_name)
-    logging.info(f"Scanning AHA worksheet: {ws.title}")
+    logging.debug(f"Scanning AHA worksheet: {ws.title}")
     
     headers = ws.row_values(1)
     header_index = {_normalize_header(h): idx + 1 for idx, h in enumerate(headers)}

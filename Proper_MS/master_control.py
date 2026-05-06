@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 
 from utils import resource_path, log_file, base_dir, load_settings, env_file, ensure_external_env
 
+from dashboard_events import dashboard_event                                                                                         # Human-readable mini live log event helper
+from split_logging import setup_split_logging                                                                                        # Set up separate log files for different services    
+
 """PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))"""
@@ -52,6 +55,8 @@ logging.basicConfig(
     level=logging.INFO,                                                                                                              # Log INFO level and above
     format="%(asctime)s - %(levelname)s - %(message)s"                                                                               # Standard log message format
 )
+
+setup_split_logging()                                                                                                                # Set up separate log files for different services on top of app.log
 
 # ===========================================
 # Set up Global Variable, Pause Event, Queue
@@ -97,8 +102,9 @@ def bootstrap_after_gui(window):
         logging.info("No saved AHA session found. Running automated AHA login.")
         aha_login_check()                                                                                                            # Use saved env credentials to log in and save aha_auth.json
         logging.info("AHA login completed and state saved.")
+        dashboard_event("[AHA] login completed")                                                                                     # Mini dashboard event for successful AHA login
     else:
-        logging.info("Using existing AHA login state.")
+        logging.debug("Using existing AHA login state.")
 
     start_background_services()                                                                                                      # Start automation only after AHA setup is ready
     background_services_started = True                                                                                               # Mark startup as complete so it does not run twice
@@ -319,6 +325,7 @@ def automation_worker():
     while True:                                                                                                                      # Keep processing queued automation jobs forever
         name, date = automation_queue.get()                                                                                          # Wait for next queued name/date task
         logging.info("Worker starting automation task: %s, %s", name, date)
+        dashboard_event(f"[AHA] task started: {name}, {date}")                                                                       # Mini dashboard event for started AHA automation task
         try:
             settings = load_settings()                                                                                               # Reload current settings before each task
             run_demo(name=name, date=date, headless=settings["IS_HEADLESS"])                                                         # Run browser automation for queued task
@@ -328,6 +335,7 @@ def automation_worker():
             automation_queue.task_done()                                                                                             # Mark queued task as finished
             set_queue_status(automation_queue.qsize())                                                                               # Update GUI queue count file
             logging.info("Worker completed automation task: %s, %s", name, date)
+            dashboard_event(f"[AHA] task completed: {name}, {date}")                                                                 # Mini dashboard event for completed AHA automation task
 
 #===================
 # AUTOMATION SCRIPT
@@ -341,7 +349,7 @@ def automation_loop():
     if not token:
         logging.error("Authentication failure. No Access Token.")                                                                    # Stop automation loop if Outlook auth fails
         return
-    logging.info("Authentication successful. Outlook Token acquired.")
+    logging.debug("Authentication successful. Outlook Token acquired.")
 
     # Start the automation worker thread (non-daemon for safe shutdown)
     threading.Thread(target=automation_worker, daemon=False).start()                                                                 # Start queue worker that handles browser jobs
@@ -370,12 +378,13 @@ def automation_loop():
                     logging.warning("Automation queue full. Skipping task: %s, %s", name, date)
                 else:
                     logging.info("Queuing automation task: %s, %s (queue size: %d)", name, date, automation_queue.qsize())
+                    dashboard_event(f"[AHA] task queued: {name}, {date}")                                                            # Mini dashboard event for queued AHA automation task
                     automation_queue.put((name, date))                                                                               # Add task to queue for worker thread
                     set_queue_status(automation_queue.qsize())                                                                       # Update visible queue count
             except Exception as e:
                 logging.exception("Error queuing automation cycle: %s", e)
         else:
-            logging.info("No new emails to process in this cycle.")                                                                  # Nothing valid returned from run_cycle
+            logging.debug("No new emails to process in this cycle.")                                                                 # Nothing valid returned from run_cycle
 
         try:
             reminder_stats = process_due_reminder_emails(token)
@@ -402,7 +411,7 @@ def automation_loop():
         except Exception as e:
             logging.exception("AHA location email cycle failed: %s", e)
 
-        logging.info("Cycle complete. Waiting %d seconds for next cycle...", interval)
+        logging.debug("Cycle complete. Waiting %d seconds for next cycle...", interval)
         time.sleep(interval)                                                                                                         # Wait before next email parsing cycle
 
 #=================
@@ -440,4 +449,5 @@ def start_background_services():
 
 if __name__ == "__main__":
     logging.info("Opening Settings GUI on startup")
+    dashboard_event("[APP] Application started")                                                                                     # Mini dashboard event for application startup
     open_settings_window()                                                                                                           # GUI in Main Thread

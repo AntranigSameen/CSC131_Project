@@ -105,7 +105,7 @@ def stop_scheduler(timeout=5):
     global _scheduler_thread, _scheduler_stop_event
     
     if _scheduler_thread is None or not _scheduler_thread.is_alive():
-        logging.info("Registration auto-flip scheduler not running")
+        logging.debug("Registration auto-flip scheduler not running")
         return True
     
     # Signal stop

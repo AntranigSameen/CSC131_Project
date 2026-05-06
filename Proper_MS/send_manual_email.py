@@ -97,7 +97,7 @@ def send_manual_location_email(
     resolved_location = _resolve_location_from_key_store(location_clean, location_pairs)
     if not resolved_location:
         logging.error(f"Location '{location_clean}' not found in location_keys.txt")
-        logging.info(f"Available locations: {', '.join(location_pairs.values())}")
+        logging.debug(f"Available locations: {', '.join(location_pairs.values())}")
         return False
     
     # Check if already sent (to avoid double-sending)
@@ -121,7 +121,7 @@ def send_manual_location_email(
     if subject and body:
         final_subject = subject
         final_body = body
-        logging.info("Using custom subject and body")
+        logging.debug("Using custom subject and body")
     else:
         templates = _load_location_email_templates()
         final_subject, final_body = _compose_location_email(
@@ -132,17 +132,17 @@ def send_manual_location_email(
             location_key,
             templates,
         )
-        logging.info(f"Using template for location key: {location_key or 'default'}")
+        logging.debug(f"Using template for location key: {location_key or 'default'}")
     
     # Display preview
-    logging.info("=" * 60)
-    logging.info(f"TO: {email_clean}")
-    logging.info(f"LOCATION: {resolved_location}")
-    logging.info(f"CYCLE MARKER: {cycle_marker or '(none)'}")
-    logging.info(f"SUBJECT: {final_subject}")
-    logging.info("-" * 60)
-    logging.info(f"BODY:\n{final_body}")
-    logging.info("=" * 60)
+    logging.debug("=" * 60)
+    logging.debug(f"TO: {email_clean}")
+    logging.debug(f"LOCATION: {resolved_location}")
+    logging.debug(f"CYCLE MARKER: {cycle_marker or '(none)'}")
+    logging.debug(f"SUBJECT: {final_subject}")
+    logging.debug("-" * 60)
+    logging.debug(f"BODY:\n{final_body}")
+    logging.debug("=" * 60)
     
     if dry_run:
         logging.info("[DRY RUN] Email not sent. Remove --dry-run to actually send.")
@@ -207,7 +207,7 @@ def send_batch_emails(csv_file: str, dry_run: bool = False) -> dict:
                     stats["skipped"] += 1
                     continue
                 
-                logging.info(f"\n--- Processing row {row_num}: {email} ---")
+                logging.debug(f"\n--- Processing row {row_num}: {email} ---")
                 
                 success = send_manual_location_email(
                     email=email,
@@ -223,9 +223,9 @@ def send_batch_emails(csv_file: str, dry_run: bool = False) -> dict:
                 else:
                     stats["failed"] += 1
             
-            logging.info(f"\n{'=' * 60}")
+            logging.debug(f"\n{'=' * 60}")
             logging.info(f"Batch complete: {stats['sent']} sent, {stats['failed']} failed, {stats['skipped']} skipped")
-            logging.info(f"{'=' * 60}")
+            logging.debug(f"{'=' * 60}")
             return stats
             
     except FileNotFoundError:
@@ -268,9 +268,9 @@ def main():
             logging.error("No location keys configured.")
             sys.exit(1)
         
-        logging.info("Available locations:")
+        logging.debug("Available locations:")
         for key, value in location_pairs.items():
-            logging.info(f"  {key} -> {value}")
+            logging.debug(f"  {key} -> {value}")
         sys.exit(0)
     
     # Batch mode
