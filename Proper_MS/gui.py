@@ -10,8 +10,8 @@ import logging
 from pathlib import Path
 
 from dotenv import set_key, load_dotenv
-from PySide6.QtCore import Qt, QTimer, QSize, QRect, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor
+from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor, QPainter, QPen, QFont
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
                                QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, QCheckBox, QTabWidget,)
@@ -293,6 +293,53 @@ class ScrollablePage(QWidget):
         scroll.setWidget(child_widget)                                                                                                # Put actual page inside scroll area
 
         layout.addWidget(scroll)
+
+# ===================
+# PILL SWITCH TOGGLE
+# ===================
+
+class PillSwitch(QCheckBox):
+    def __init__(self, left_icon="🌙", right_icon="☀️", parent=None):
+        super().__init__(parent)
+        self.left_icon = left_icon                                                                                                    # Icon shown on left side of switch
+        self.right_icon = right_icon                                                                                                  # Icon shown on right side of switch
+        self.setCursor(Qt.PointingHandCursor)                                                                                         # Make the switch feel clickable
+        self.setFixedSize(60, 30)                                                                                                     # Fixed pill size for icon toggle
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)                                                                                  # Smooth rounded pill and knob
+
+        checked = self.isChecked()
+
+        bg_color = QColor("#00bc8c") if checked else QColor("#2b2f36")                                                            # Accent color when enabled, dark gray when disabled
+        border_color = QColor("#00bc8c") if checked else QColor("#555b66")
+        knob_color = QColor("#ffffff")
+
+        pill_rect = QRectF(1, 1, self.width() - 2, self.height() - 2)
+        painter.setPen(QPen(border_color, 1))
+        painter.setBrush(bg_color)
+        painter.drawRoundedRect(pill_rect, 14, 14)                                                                                    # Draw rounded switch background
+
+        knob_size = 24
+        knob_x = self.width() - knob_size - 4 if checked else 4
+        knob_y = (self.height() - knob_size) / 2
+        knob_rect = QRectF(knob_x, knob_y, knob_size, knob_size)
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(knob_color)
+        painter.drawEllipse(knob_rect)                                                                                                # Draw centered sliding knob
+
+        painter.setFont(QFont("Segoe UI Emoji", 9))
+
+        left_rect = QRectF(4, 0, 24, self.height())
+        right_rect = QRectF(self.width() - 28, 0, 24, self.height())
+
+        painter.setPen(QColor("#f4c542"))
+        painter.drawText(left_rect, Qt.AlignCenter, self.left_icon)                                                                   # Center left icon inside left side
+
+        painter.setPen(QColor("#f4c542"))
+        painter.drawText(right_rect, Qt.AlignCenter, self.right_icon)                                                                 # Center right icon inside right side
 
 # =================
 # SYSTEM TRAY ICON
@@ -594,6 +641,8 @@ class SettingsWindow(QMainWindow):
         mini_logs_panel = QFrame()
         mini_logs_panel.setObjectName("MiniLogsPanel")                                                                                # Styled compact log viewer panel for top-right area
         mini_logs_panel.setFixedHeight(166)                                                                                           # Set Live Logs panel to match height of cards grid
+        mini_logs_panel.setMaximumHeight(166)                                                                                         # Keep mini live logs same height in light and dark mode
+        mini_logs_panel.setMinimumHeight(166)                                                                                         # Prevent stylesheet/layout changes from making mini logs taller
 
         mini_logs_layout = QVBoxLayout(mini_logs_panel)
         mini_logs_layout.setContentsMargins(10, 8, 10, 8)                                                                             # Compact inner padding so log box fits cleanly inside the fixed-height panel
@@ -609,6 +658,7 @@ class SettingsWindow(QMainWindow):
         self.mini_log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)                                                # Fill available space inside panel
         self.mini_log_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)                                                        # Hide horizontal scrollbar in compact preview
         self.mini_log_text.setPlaceholderText("Recent log lines will appear here...")
+        self.mini_log_text.setMaximumHeight(100)                                                                                      # Keep compact mini log text area from growing in light mode
 
         mini_logs_layout.addWidget(mini_logs_title)
         mini_logs_layout.addWidget(self.mini_log_text)
@@ -636,27 +686,33 @@ class SettingsWindow(QMainWindow):
         self.quit_btn.setObjectName("QuitButton")                                                                                     # Used by stylesheet for quit button
         self.quit_btn.setFixedHeight(26)
 
-        self.signout_btn = QPushButton("Sign Out of AHA")
-        self.signout_btn.setObjectName("SignOutButton")                                                                               # Used by stylesheet for sign-out button
-        self.signout_btn.setFixedHeight(28)                                                                                           # Set the AHA sign-out button height
-        self.signout_btn.setMinimumWidth(110)                                                                                         # Keep button compact without shrinking text too aggressively
-        self.signout_btn.setMaximumWidth(130)                                                                                         # Prevent button from stretching too wide
-
         self.aha_required_label = QLabel("AHA login required")
         self.aha_required_label.setObjectName("AHARequiredLabel")                                                                     # Red warning label shown when no AHA login exists
         self.aha_required_label.hide()                                                                                                # Hidden by default until login check says it is needed
 
-        # =========================
-        # Top-right AHA Status Row
-        # =========================
+        # ===========================
+        # Top-right Theme Toggle Row
+        # ===========================
 
-        aha_row = QHBoxLayout()
-        aha_row.setContentsMargins(0, 0, 0, 0)
-        aha_row.setSpacing(6)
+        top_tools_row = QHBoxLayout()
+        top_tools_row.setContentsMargins(0, 0, 0, 0)
+        top_tools_row.setSpacing(8)
 
-        aha_row.addStretch(1)                                                                                                         # Push AHA controls toward the right side
-        aha_row.addWidget(self.signout_btn, 0, Qt.AlignVCenter)                                                                       # Standalone AHA sign-out button, centered vertically
-        aha_row.addWidget(self.aha_required_label, 0, Qt.AlignVCenter)                                                                # Red warning text appears when AHA login is missing, aligned with button
+        self.theme_toggle = PillSwitch("🌙", "☀️")                                                                                   # Custom sun/moon switch for toggling between dark and light mode
+        self.theme_toggle.setObjectName("ThemeToggle")                                                                                # Custom sun/moon switch for toggling between light and dark mode
+
+        current_theme = os.getenv("APP_THEME", "dark").strip().lower()
+        self.is_light_mode = current_theme == "light"                                                                                 # Track current GUI theme
+        self.theme_toggle.setChecked(self.is_light_mode)                                                                              # Checked means light mode
+
+        self.theme_label = QLabel("Light" if self.is_light_mode else "Dark")
+        self.theme_label.setObjectName("ThemeToggleText")                                                                             # Text beside theme toggle showing active theme
+
+        self.theme_toggle.stateChanged.connect(self._toggle_theme_mode)                                                               # Change theme immediately when toggle is clicked
+
+        top_tools_row.addStretch(1)                                                                                                   # Push theme toggle to the top-right corner
+        top_tools_row.addWidget(self.theme_toggle, 0, Qt.AlignVCenter)                                                                # Single custom toggle already contains moon and sun icons
+        top_tools_row.addWidget(self.theme_label, 0, Qt.AlignVCenter)                                                                 # Active theme text
 
 
         self.pause_btn = QPushButton("Pause All")
@@ -696,8 +752,6 @@ class SettingsWindow(QMainWindow):
         self.pause_btn.clicked.connect(self._run_selected_pause_action)                                                               # Main button acts as quick toggle for Pause All
         self.restart_btn.clicked.connect(lambda: self._animate_button_press(self.restart_btn))                                        # Animate press before restart
         self.restart_btn.clicked.connect(restart_application)                                                                         # Restart whole app
-        self.signout_btn.clicked.connect(lambda: self._animate_button_press(self.signout_btn))                                        # Animate press before sign out
-        self.signout_btn.clicked.connect(sign_out)                                                                                    # Clear saved AHA login state
         self.quit_btn.clicked.connect(lambda: self._animate_button_press(self.quit_btn))                                              # Animate press before quit
         self.quit_btn.clicked.connect(self._quit_clicked)                                                                             # Confirm and quit app
 
@@ -722,7 +776,7 @@ class SettingsWindow(QMainWindow):
 
         mini_logs_layout.addWidget(pause_control, 0, Qt.AlignRight)                                                                   # Pause All control under the mini logs on the right side
 
-        root.addLayout(aha_row)                                                                                                       # Separate AHA sign-out + warning near top
+        root.addLayout(top_tools_row)                                                                                                 # Separate theme toggle
         root.addLayout(top_dashboard_row)                                                                                             # Top-left cards + top-right mini logs
         root.addLayout(controls_row)                                                                                                  # Save / Restart / Quit row
 
@@ -1011,122 +1065,6 @@ class SettingsWindow(QMainWindow):
 
         self._add_sidebar_page(ScrollablePage(page), "RQI Export Manager", "🏠")                                                      # Add sidebar page for RQI export manager
 
-###### DELETE THIS WHEN DONE TESTING NEW TAB LAYOUT - TEMPORARY START PAGE TO SHOW ALL QUICK STATUS INFO IN ONE PLACE #######################
-    '''
-    # ==============
-    # AHA LOGIN TAB
-    # ==============
-      
-    def _build_aha_tab(self):
-        page = QWidget()
-        form = QFormLayout(page)
-
-        self.aha_login_label = QLabel("Checking login state...")                                                                      # Live label showing signed in/out state
-        form.addRow("AHA Login Status:", self.aha_login_label)
-
-        aha_user = QLineEdit(os.getenv("AHA_USERNAME", ""))                                                                           # Populate username from .env
-        aha_pass = QLineEdit(os.getenv("AHA_PASSWORD", ""))                                                                           # Populate password from .env
-        aha_pass.setEchoMode(QLineEdit.Password)                                                                                      # Hide password characters in GUI
-
-        self.entries["AHA_USERNAME"] = aha_user                                                                                       # Save widget reference for later .env writeback
-        self.entries["AHA_PASSWORD"] = aha_pass                                                                                       # Save widget reference for later .env writeback
-
-        form.addRow("AHA Username", aha_user)
-        form.addRow("AHA Password", aha_pass)
-
-        self._add_sidebar_page(ScrollablePage(page), "AHA Login", "🔐")                                                               # Add AHA login page to sidebar navigation
-
-    # ================
-    # EMAIL LOGIN TAB
-    # ================
-
-    def _build_email_tab(self):
-        page = QWidget()
-        form = QFormLayout(page)
-
-        fields = {
-            "SENDER_EMAIL": "Sender Email Address",
-            "KEYWORD_NAME": "Keyword Before Name",
-            "INTERVAL": "Automation Interval (seconds)",
-
-            "SENDER_EMAIL_RQI": "Sender Email for RQI Parsing",
-        }                                                                                                                             # All editable email-related env fields
-
-        for key, label in fields.items():
-            edit = QLineEdit(os.getenv(key, ""))                                                                                      # Pre-fill each field from current .env
-            self.entries[key] = edit                                                                                                  # Store widget by env variable name
-            form.addRow(label, edit)
-
-        self._add_sidebar_page(ScrollablePage(page), "Email", "📧")                                                                  # Add Email settings page to sidebar navigation
-
-    # ==================
-    # GOOGLE SHEETS TAB
-    # ==================
-
-    def _build_sheets_tab(self):
-        page = QWidget()
-        form = QFormLayout(page)
-
-        fields = {
-            "SERVICE_ACCOUNT_RQI_JSON": "RQI Service Account File",
-            "SERVICE_ACCOUNT_AHA_JSON": "AHA Service Account File",
-            "GOOGLE_SHEET_URL": "AHA Google Sheet URL",
-            "SPREADSHEET_ID": "RQI Google Sheet ID",
-        }                                                                                                                             # Google Sheets related env fields
-
-        for key, label in fields.items():
-            edit = QLineEdit(os.getenv(key, ""))                                                                                      # Pre-fill each field from current .env
-            self.entries[key] = edit                                                                                                  # Store widget by env variable name
-            form.addRow(label, edit)
-
-        self._add_sidebar_page(ScrollablePage(page), "Sheets", "📄")                                                                  # Add Sheets page to sidebar navigation
-
-    # =============================
-    # MICROSOFT AUTHENTICATION TAB
-    # =============================
-
-    def _build_auth_tab(self):
-        page = QWidget()
-        form = QFormLayout(page)
-
-        fields = {                                                                                                                    # Microsoft authentication env fields
-            "CLIENT_ID": "Azure Client ID",                                                                                           #
-            "TENANT_ID": "Azure Tenant ID",                                                                                           #
-            "AUTHORITY": "Highest Credential Access",                                                                                 #
-            "SCOPES": "App Permissions",                                                                                              #
-            "CACHE_FILE": "Cache File",                                                                                               #
-        }                                                                                                                             # Microsoft authentication env fields
-
-        for key, label in fields.items():
-            edit = QLineEdit(os.getenv(key, ""))                                                                                      # Pre-fill each field from current .env
-            self.entries[key] = edit                                                                                                  # Store widget by env variable name
-            form.addRow(label, edit)
-
-        self._add_sidebar_page(ScrollablePage(page), "Authentication", "🪪")                                                         # Add Authentication page to sidebar navigation
-
-    # ============
-    # GENERAL TAB
-    # ============
-
-    def _build_general_tab(self):
-        page = QWidget()
-        form = QFormLayout(page)
-
-        fields = {
-            "ORG_NAME": "Organization Name",
-            "IS_HEADLESS": "Run Headless",
-        }                                                                                                                             # General application env fields
-
-        for key, label in fields.items():
-            edit = QLineEdit(os.getenv(key, ""))                                                                                      # Pre-fill each field from current .env
-            self.entries[key] = edit                                                                                                  # Store widget by env variable name
-            form.addRow(label, edit)
-
-        self._add_sidebar_page(ScrollablePage(page), "General", "⚙️")                                                                 # Add General settings page to sidebar navigation
-        
-    '''
-########################### DELETE STUFF ON TOP ^ WHEN DONE TESTING NEW TAB LAYOUT - TEMPORARY START PAGE TO SHOW ALL QUICK STATUS INFO IN ONE PLACE ##################################
-
     # ================
     # CREDENTIALS TAB
     # ================
@@ -1167,6 +1105,46 @@ class SettingsWindow(QMainWindow):
         aha_form.addRow("AHA Username", aha_user)
         aha_form.addRow("AHA Password", aha_pass)
 
+        self.headless_toggle = PillSwitch("", "")                                                                                     # Visible/headless browser toggle shown inside AHA Login tab
+
+        current_headless = os.getenv("IS_HEADLESS", "True").strip().lower()
+        self.headless_toggle.setChecked(current_headless in ("1", "true", "yes", "on"))                                               # Load existing headless value from .env
+
+        self.headless_toggle_label = QLabel()
+        self.headless_toggle_label.setObjectName("HeadlessToggleLabel")                                                               # Text label beside the toggle showing current browser mode
+
+        self.entries["IS_HEADLESS"] = self.headless_toggle                                                                            # Save toggle value back into .env as True/False
+
+        headless_row = QWidget()
+        headless_row_layout = QHBoxLayout(headless_row)
+        headless_row_layout.setContentsMargins(0, 0, 0, 0)
+        headless_row_layout.setSpacing(10)
+        headless_row_layout.addWidget(self.headless_toggle)
+        headless_row_layout.addWidget(self.headless_toggle_label)
+        headless_row_layout.addStretch(1)
+
+        self.headless_toggle.stateChanged.connect(self._update_headless_toggle_label)                                                 # Update descriptive label when toggle changes
+        self._update_headless_toggle_label()                                                                                          # Initial label update on page creation
+
+        aha_form.addRow("Browser Mode", headless_row)
+
+        aha_signout_widget = QWidget()
+        aha_signout_row = QHBoxLayout(aha_signout_widget)
+        aha_signout_row.setContentsMargins(0, 6, 0, 0)                                                                                # Keep Sign Out button aligned to the true left edge of the AHA tab
+        aha_signout_row.setSpacing(8)
+
+        self.signout_btn = QPushButton("Sign Out of AHA")
+        self.signout_btn.setObjectName("SignOutButton")                                                                               # AHA sign-out button now lives inside the AHA Login settings tab
+        self.signout_btn.setFixedHeight(30)
+        self.signout_btn.setMaximumWidth(150)
+        self.signout_btn.clicked.connect(lambda: self._animate_button_press(self.signout_btn))                                        # Animate press before sign out
+        self.signout_btn.clicked.connect(sign_out)                                                                                    # Clear saved AHA login state
+
+        aha_signout_row.addWidget(self.signout_btn, 0, Qt.AlignLeft)                                                                  # Align button to the left edge
+        aha_signout_row.addStretch(1)
+
+        aha_form.addRow(aha_signout_widget)                                                                                           # Full-width form row with no label-column indentation
+
         settings_tabs.addTab(aha_page, "AHA Login")                                                                                   # Add AHA settings as horizontal inner tab
 
         # ================
@@ -1190,51 +1168,6 @@ class SettingsWindow(QMainWindow):
             email_form.addRow(label, edit)
 
         settings_tabs.addTab(email_page, "Email")                                                                                     # Add Email settings as horizontal inner tab
-
-        # =======================
-        # Browser Mode inner tab
-        # =======================
-
-        browser_page = QWidget()
-        browser_layout = QVBoxLayout(browser_page)
-        browser_layout.setSpacing(12)
-
-        browser_info = QLabel("Choose whether the browser automation runs invisibly in the background or opens a visible browser window.")
-        browser_info.setObjectName("SectionSubtitle")                                                                                # Helper text explaining headless mode
-        browser_info.setWordWrap(True)
-
-        browser_form = QFormLayout()
-        browser_form.setSpacing(10)
-
-        self.headless_toggle = QCheckBox()
-        self.headless_toggle.setObjectName("HeadlessToggle")                                                                          # Styled like a modern toggle switch
-
-        current_headless = os.getenv("IS_HEADLESS", "True").strip().lower()
-        self.headless_toggle.setChecked(current_headless in ("1", "true", "yes", "on"))                                               # Load existing headless value from .env
-
-        self.headless_toggle_label = QLabel()
-        self.headless_toggle_label.setObjectName("HeadlessToggleLabel")                                                               # Text label beside the toggle showing current mode
-
-        self.entries["IS_HEADLESS"] = self.headless_toggle                                                                            # Save toggle value back into .env as True/False
-
-        toggle_row = QWidget()
-        toggle_row_layout = QHBoxLayout(toggle_row)
-        toggle_row_layout.setContentsMargins(0, 0, 0, 0)
-        toggle_row_layout.setSpacing(10)
-        toggle_row_layout.addWidget(self.headless_toggle)
-        toggle_row_layout.addWidget(self.headless_toggle_label)
-        toggle_row_layout.addStretch(1)
-
-        self.headless_toggle.stateChanged.connect(self._update_headless_toggle_label)                                                 # Update descriptive label when toggle changes
-        self._update_headless_toggle_label()                                                                                          # Initial label update on page creation
-
-        browser_form.addRow("Run Headless", toggle_row)
-
-        browser_layout.addWidget(browser_info)
-        browser_layout.addLayout(browser_form)
-        browser_layout.addStretch(1)
-
-        settings_tabs.addTab(browser_page, "Browser Mode")                                                                            # Add browser mode as horizontal inner tab
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -1309,6 +1242,20 @@ class SettingsWindow(QMainWindow):
         layout.addStretch(1)                                                                                                          # Push reminder email controls upward so page feels tidy
 
         self._add_sidebar_page(ScrollablePage(page), "Reminder Emails", "⏰")                                                         # Add Reminder Emails page to sidebar navigation
+
+    # ====================
+    # THEME TOGGLE BUTTON
+    # ====================
+
+    def _toggle_theme_mode(self):
+        self.is_light_mode = self.theme_toggle.isChecked()                                                                            # Checked means light mode
+
+        theme_value = "light" if self.is_light_mode else "dark"
+        set_key(CONFIG_FILE, "APP_THEME", theme_value)                                                                                # Save selected theme into .env immediately
+        load_dotenv(CONFIG_FILE, override=True)                                                                                       # Reload current process environment after saving theme
+
+        self.theme_label.setText("Light" if self.is_light_mode else "Dark")                                                           # Update visible theme text
+        self._apply_styles()                                                                                                          # Re-apply stylesheet using selected theme
 
     # ==================
     # MANUAL EMAILER TAB
@@ -2691,6 +2638,13 @@ class SettingsWindow(QMainWindow):
     # =======
 
     def _apply_styles(self):                                                                                                          # Main dark theme stylesheet for the entire GUI
+        
+        if getattr(self, "is_light_mode", False):
+            self._apply_light_styles()                                                                                                # Apply light theme stylesheet
+            return
+        self._apply_dark_styles()                                                                                                     # Apply dark theme stylesheet
+
+    def _apply_dark_styles(self):
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #1e1f22;
@@ -2735,26 +2689,7 @@ class SettingsWindow(QMainWindow):
             }
             QCheckBox#HeadlessToggle {
                 spacing: 8px;
-            }
-
-            QCheckBox#HeadlessToggle::indicator {
-                width: 46px;
-                height: 24px;
-                border-radius: 12px;
-                background-color: #3b3d42;
-                border: 1px solid #555b66;
-            }
-
-            QCheckBox#HeadlessToggle::indicator:checked {
-                background-color: #00bc8c;
-                border: 1px solid #00bc8c;
-            }
-
-            QCheckBox#HeadlessToggle::indicator:unchecked {
-                background-color: #3b3d42;
-                border: 1px solid #555b66;
-            }
-                           
+            }                           
             QFrame#SidebarFrame {
                 background-color: #20242c;
                 border: 1px solid #323844;
@@ -2948,7 +2883,7 @@ class SettingsWindow(QMainWindow):
             QFrame#MiniLogsPanel {
                 background-color: #2b2d31;
                 border: 1px solid #3b3d42;
-                border-radius: 14px;
+                border-radius: 12px;
                 min-height: 166px;
                 max-height: 166px;
             }
@@ -3008,16 +2943,243 @@ class SettingsWindow(QMainWindow):
                 font-size: 11px;
             }
             QPlainTextEdit#MiniLogText {
-                background-color: #151821;                                                                                            /* Slightly darker compact log panel */
-                border: 1px solid #343842;
+                background-color: #11141c;
+                color: white;
+                border: 1px solid #333842;
                 border-radius: 10px;
-                padding: 5px;
-                font-family: Consolas, 'Courier New', monospace;
-                font-size: 10px;                                                                                                      /* Smaller font for dashboard-style compact logs */
+                padding: 6px;
+                min-height: 84px;
+                max-height: 100px;
             }
             QScrollArea {
                 border: none;
                 background: transparent;
+            }
+        """)
+    
+    def _apply_light_styles(self):
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f7fb;
+                color: #111827;
+            }
+
+            QWidget {
+                background-color: #f5f7fb;
+                color: #111827;
+                font-family: Segoe UI;
+                font-size: 12px;
+            }
+
+            QFrame#StatusCard,
+            QStackedWidget#ContentStack,
+            QFrame#ExportStatusCard {
+                background-color: #ffffff;
+                border: 1px solid #d5dce8;
+                border-radius: 12px;
+            }
+            QFrame#MiniLogsPanel {
+                background-color: #ffffff;
+                border: 1px solid #d5dce8;
+                border-radius: 12px;
+                min-height: 166px;
+                max-height: 166px;
+            }
+
+            QFrame#SidebarFrame {
+                background-color: #ffffff;
+                border: 1px solid #d5dce8;
+                border-radius: 12px;
+            }
+
+            QLabel#SectionTitle {
+                color: #111827;
+                font-size: 20px;
+                font-weight: 800;
+            }
+
+            QLabel#SectionSubtitle {
+                color: #4b5563;
+                font-size: 12px;
+            }
+
+            QLabel#StatusCardTitle,
+            QLabel#ExportStatusTitle,
+            QLabel#MiniLogsTitle {
+                color: #374151;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            QLabel#StatusCardValue,
+            QLabel#ExportStatusValue {
+                color: #111827;
+                font-size: 14px;
+                font-weight: 700;
+                background-color: transparent;
+            }
+
+            QLineEdit,
+            QPlainTextEdit,
+            QTextEdit,
+            QComboBox,
+            QSpinBox {
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #c8d0dc;
+                border-radius: 10px;
+                padding: 8px;
+                selection-background-color: #3498db;
+            }
+
+            QLineEdit:focus,
+            QPlainTextEdit:focus,
+            QTextEdit:focus,
+            QComboBox:focus,
+            QSpinBox:focus {
+                border: 1px solid #3498db;
+            }
+
+            QPlainTextEdit#MiniLogText {
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #c8d0dc;
+                border-radius: 10px;
+                padding: 6px;
+                min-height: 84px;
+                max-height: 100px;
+            }
+
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                padding: 7px 14px;
+                font-weight: 700;
+            }
+
+            QPushButton:hover {
+                background-color: #2d89c8;
+            }
+
+            QPushButton#SaveButton {
+                background-color: #00bc8c;
+                color: white;
+                min-width: 170px;
+            }
+
+            QPushButton#PauseButton {
+                background-color: #f39c12;
+                color: white;
+                border-top-right-radius: 0px;
+                border-bottom-right-radius: 0px;
+            }
+
+            QToolButton#PauseMenuButton {
+                background-color: #f39c12;
+                color: white;
+                border: none;
+                border-left: 1px solid rgba(255,255,255,80);
+                border-top-right-radius: 10px;
+                border-bottom-right-radius: 10px;
+            }
+
+            QPushButton#QuitButton {
+                background-color: #e64e30;
+                color: white;
+            }
+
+            QPushButton#RestartButton {
+                background-color: #f39c12;
+                color: white;
+            }
+
+            QPushButton#SignOutButton {
+                background-color: #3498db;
+                color: white;
+            }
+
+            QPushButton#ActionButton {
+                background-color: #5865f2;
+                color: white;
+                min-width: 160px;
+            }
+
+            QToolButton#SidebarButton {
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #d5dce8;
+                border-radius: 22px;
+                font-size: 18px;
+            }
+
+            QToolButton#SidebarButton:checked {
+                background-color: #00bc8c;
+                color: white;
+            }
+
+            QToolButton#SidebarButton:hover {
+                background-color: #eef2f7;
+            }
+
+            QFrame#SidebarIndicator {
+                background-color: #00bc8c;
+                border-radius: 2px;
+            }
+
+            QToolButton#SidebarCollapseButton {
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #d5dce8;
+                border-radius: 8px;
+            }
+
+            QTabWidget::pane {
+                border: 1px solid #d5dce8;
+                border-radius: 10px;
+                background-color: #ffffff;
+                margin-top: 6px;
+            }
+
+            QTabBar::tab {
+                background-color: #eef2f7;
+                color: #111827;
+                padding: 8px 16px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 4px;
+            }
+
+            QTabBar::tab:selected {
+                background-color: #00bc8c;
+                color: white;
+                font-weight: 700;
+            }
+
+            QTabBar::tab:hover {
+                background-color: #dbeafe;
+            }
+
+            QLabel#AHARequiredLabel {
+                color: #e64e30;
+                font-weight: 800;
+            }
+
+            QLabel#ThemeToggleText,
+            QLabel#HeadlessToggleLabel {
+                color: #111827;
+                font-weight: 700;
+                background-color: transparent;
+            }
+
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+
+            QScrollArea > QWidget > QWidget {
+                background-color: #f5f7fb;
             }
         """)
 
