@@ -130,6 +130,8 @@ def save_settings(entries, restart=False):
         # Handle both QLineEdit (text()) and QSpinBox (value())
         if isinstance(widget, QSpinBox):
             new_value = str(widget.value())                                                                                           # Numeric widgets save their integer value
+        elif isinstance(widget, QCheckBox):
+            new_value = "True" if widget.isChecked() else "False"                                                                     # Checkboxes save as "True"/"False" strings   
         else:
             new_value = widget.text()                                                                                                 # Standard single-line fields save their text normally
 
@@ -776,16 +778,12 @@ class SettingsWindow(QMainWindow):
         root.addLayout(content_row, 1)
 
         self._build_csv_sftp_tab()                                                                                                    # RQI CSV & SFTP page
-        self._build_aha_tab()                                                                                                         # AHA credentials page
-        self._build_email_tab()                                                                                                       # Email settings page
-        self._build_sheets_tab()                                                                                                      # Google Sheets settings page
-        self._build_auth_tab()                                                                                                        # Microsoft authentication settings page
+        self._build_credentials_tab()                                                                                                 # Credential management page
         self._build_reminder_emails_tab()                                                                                             # Reminder Emails page
         self._build_manual_emailer_tab()                                                                                              # Manual Email Sender page
         self._build_location_keys_tab()                                                                                               # Location key mapping page
         self._build_location_templates_tab()                                                                                          # Location email template editor page
         self._build_location_tracker_tab()                                                                                            # Location email tracker audit page
-        self._build_general_tab()                                                                                                     # General settings page
         self._build_logs_tab()                                                                                                        # Live logs page
 
         if self.sidebar_buttons:
@@ -985,10 +983,12 @@ class SettingsWindow(QMainWindow):
 
         self._add_sidebar_page(ScrollablePage(page), "RQI CSV / SFTP", "🏠")                                                         # Add sidebar page for RQI CSV & SFTP tab
 
+###### DELETE THIS WHEN DONE TESTING NEW TAB LAYOUT - TEMPORARY START PAGE TO SHOW ALL QUICK STATUS INFO IN ONE PLACE #######################
+    '''
     # ==============
     # AHA LOGIN TAB
     # ==============
-
+      
     def _build_aha_tab(self):
         page = QWidget()
         form = QFormLayout(page)
@@ -1095,6 +1095,124 @@ class SettingsWindow(QMainWindow):
             form.addRow(label, edit)
 
         self._add_sidebar_page(ScrollablePage(page), "General", "⚙️")                                                                 # Add General settings page to sidebar navigation
+        
+    '''
+########################### DELETE STUFF ON TOP ^ WHEN DONE TESTING NEW TAB LAYOUT - TEMPORARY START PAGE TO SHOW ALL QUICK STATUS INFO IN ONE PLACE ##################################
+
+    # ================
+    # CREDENTIALS TAB
+    # ================
+
+    def _build_credentials_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)                                                                                                         # Comfortable spacing between credential management controls and instructions
+
+        title = QLabel("Credential Management")
+        title.setObjectName("SectionTitle")                                                                                           # Main heading for credential management page
+
+        subtitle = QLabel("Manage AHA Login, Email Parsing Settings, and Browser Mode")
+        subtitle.setObjectName("SectionSubtitle")                                                                                     # Explanatory text under the main heading to guide users on what belongs in this page
+        subtitle.setWordWrap(True)                                                                                                    # Allow explanatory text to wrap naturally inside the content area
+
+        settings_tabs = QTabWidget()                                                                                                  # Use tabs to separate different types of credentials while keeping them all in one place
+        settings_tabs.setObjectName("SettingsInnerTabs")                                                                              # Container for AHA Login, Email Parsing, and Browser Mode settings subtabs
+        
+        # ==============
+        # AHA inner tab
+        # ==============
+
+        aha_page = QWidget()
+        aha_form = QFormLayout(aha_page)
+        aha_form.setSpacing(10)
+
+        self.aha_login_label = QLabel("Checking login state...")                                                                      # Live label showing signed in/out state
+        aha_form.addRow("AHA Login Status:", self.aha_login_label)
+
+        aha_user = QLineEdit(os.getenv("AHA_USERNAME", ""))                                                                           # Populate username from .env
+        aha_pass = QLineEdit(os.getenv("AHA_PASSWORD", ""))                                                                           # Populate password from .env
+        aha_pass.setEchoMode(QLineEdit.Password)                                                                                      # Hide password characters in GUI
+
+        self.entries["AHA_USERNAME"] = aha_user                                                                                       # Save widget reference for later .env writeback
+        self.entries["AHA_PASSWORD"] = aha_pass                                                                                       # Save widget reference for later .env writeback
+
+        aha_form.addRow("AHA Username", aha_user)
+        aha_form.addRow("AHA Password", aha_pass)
+
+        settings_tabs.addTab(aha_page, "AHA Login")                                                                                   # Add AHA settings as horizontal inner tab
+
+        # ================
+        # Email inner tab
+        # ================
+
+        email_page = QWidget()
+        email_form = QFormLayout(email_page)
+        email_form.setSpacing(10)
+
+        email_fields = {
+            "SENDER_EMAIL": "Sender Email Address",
+            "KEYWORD_NAME": "Keyword Before Name",
+            "INTERVAL": "Automation Interval (seconds)",
+            "SENDER_EMAIL_RQI": "Sender Email for RQI Parsing",
+        }                                                                                                                             # Email and parsing related env fields
+
+        for key, label in email_fields.items():
+            edit = QLineEdit(os.getenv(key, ""))                                                                                      # Pre-fill each field from current .env
+            self.entries[key] = edit                                                                                                  # Store widget by env variable name
+            email_form.addRow(label, edit)
+
+        settings_tabs.addTab(email_page, "Email")                                                                                     # Add Email settings as horizontal inner tab
+
+        # =======================
+        # Browser Mode inner tab
+        # =======================
+
+        browser_page = QWidget()
+        browser_layout = QVBoxLayout(browser_page)
+        browser_layout.setSpacing(12)
+
+        browser_info = QLabel("Choose whether the browser automation runs invisibly in the background or opens a visible browser window.")
+        browser_info.setObjectName("SectionSubtitle")                                                                                # Helper text explaining headless mode
+        browser_info.setWordWrap(True)
+
+        browser_form = QFormLayout()
+        browser_form.setSpacing(10)
+
+        self.headless_toggle = QCheckBox()
+        self.headless_toggle.setObjectName("HeadlessToggle")                                                                          # Styled like a modern toggle switch
+
+        current_headless = os.getenv("IS_HEADLESS", "True").strip().lower()
+        self.headless_toggle.setChecked(current_headless in ("1", "true", "yes", "on"))                                               # Load existing headless value from .env
+
+        self.headless_toggle_label = QLabel()
+        self.headless_toggle_label.setObjectName("HeadlessToggleLabel")                                                               # Text label beside the toggle showing current mode
+
+        self.entries["IS_HEADLESS"] = self.headless_toggle                                                                            # Save toggle value back into .env as True/False
+
+        toggle_row = QWidget()
+        toggle_row_layout = QHBoxLayout(toggle_row)
+        toggle_row_layout.setContentsMargins(0, 0, 0, 0)
+        toggle_row_layout.setSpacing(10)
+        toggle_row_layout.addWidget(self.headless_toggle)
+        toggle_row_layout.addWidget(self.headless_toggle_label)
+        toggle_row_layout.addStretch(1)
+
+        self.headless_toggle.stateChanged.connect(self._update_headless_toggle_label)                                                 # Update descriptive label when toggle changes
+        self._update_headless_toggle_label()                                                                                          # Initial label update on page creation
+
+        browser_form.addRow("Run Headless", toggle_row)
+
+        browser_layout.addWidget(browser_info)
+        browser_layout.addLayout(browser_form)
+        browser_layout.addStretch(1)
+
+        settings_tabs.addTab(browser_page, "Browser Mode")                                                                            # Add browser mode as horizontal inner tab
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(settings_tabs, 1)
+
+        self._add_sidebar_page(ScrollablePage(page), "Credentials Management", "🔐")                                                  # One sidebar button for AHA, Email, and Browser Mode
 
     # ===================
     # REMINDER EMAILS TAB
@@ -2211,6 +2329,17 @@ class SettingsWindow(QMainWindow):
         if _qt_tray is not None:
             _qt_tray.refresh_pause_text()                                                                                             # Keep tray text synced with current pause state
 
+    def _update_headless_toggle_label(self):
+        if not hasattr(self, "headless_toggle"):
+            return                                                                                                                    # Headless toggle has not been created yet
+
+        if self.headless_toggle.isChecked():
+            self.headless_toggle_label.setText("Headless Browser")
+            self.headless_toggle_label.setStyleSheet("color: #00bc8c; font-weight: 700;")                                             # Green text when browser runs hidden
+        else:
+            self.headless_toggle_label.setText("Visible Browser")
+            self.headless_toggle_label.setStyleSheet("color: #f39c12; font-weight: 700;")                                             # Orange text when browser window is visible
+
     def _update_status(self):
         status_file = os.path.join(base_dir(), "automation_status.txt")                                                               # Status file written by master_control
         self._update_pause_controls()                                                                                                 # Keep pause controls synced with real runtime state
@@ -2554,6 +2683,32 @@ class SettingsWindow(QMainWindow):
                 font-size: 14px;                                                                                                      /* Smaller value text so 2x2 grid fits comfortably */
                 font-weight: 700;
             }
+            QLabel#HeadlessToggleLabel {
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QCheckBox#HeadlessToggle {
+                spacing: 8px;
+            }
+
+            QCheckBox#HeadlessToggle::indicator {
+                width: 46px;
+                height: 24px;
+                border-radius: 12px;
+                background-color: #3b3d42;
+                border: 1px solid #555b66;
+            }
+
+            QCheckBox#HeadlessToggle::indicator:checked {
+                background-color: #00bc8c;
+                border: 1px solid #00bc8c;
+            }
+
+            QCheckBox#HeadlessToggle::indicator:unchecked {
+                background-color: #3b3d42;
+                border: 1px solid #555b66;
+            }
+                           
             QFrame#SidebarFrame {
                 background-color: #20242c;
                 border: 1px solid #323844;
