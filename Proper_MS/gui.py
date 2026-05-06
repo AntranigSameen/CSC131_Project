@@ -796,89 +796,184 @@ class SettingsWindow(QMainWindow):
     # TAB BUILDERS
     # ==============
 
-    # ===================
-    # RQI CSV & SFTP TAB
-    # ===================
+    # ==================
+    # RQI EXPORT MANAGER
+    # ==================
+
+    def _make_export_status_card(self, title, value_label):
+        card = QFrame()
+        card.setObjectName("ExportStatusCard")                                                                                        # Styled card for RQI export status values
+        card.setMaximumHeight(74)                                                                                                     # Keep status cards compact so manual action buttons remain visible
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 7, 10, 7)
+        layout.setSpacing(3)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("ExportStatusTitle")                                                                                # Smaller label shown above the live value
+
+        value_label.setObjectName("ExportStatusValue")                                                                                # Larger wrapped status value
+        value_label.setWordWrap(True)
+
+        layout.addWidget(title_label)
+        layout.addWidget(value_label)
+        layout.addStretch(1)
+
+        return card
+    
+    def _make_export_action_bar(self):
+        action_widget = QWidget()
+        action_widget.setObjectName("ExportActionBar")                                                                                # Manual action bar shown inside each RQI Export Manager inner tab
+
+        action_row = QHBoxLayout(action_widget)
+        action_row.setContentsMargins(0, 8, 0, 0)
+        action_row.setSpacing(8)
+
+        generate_btn = QPushButton("Generate CSV Now")
+        generate_btn.setObjectName("ActionButton")                                                                                    # Manual CSV generation button
+        generate_btn.clicked.connect(lambda: self._animate_button_press(generate_btn))                                                # Animate press before manual CSV generation
+        generate_btn.clicked.connect(self._generate_rqi_csv_clicked)                                                                  # Trigger backend CSV generation callback
+
+        upload_btn = QPushButton("Upload to SFTP Now")
+        upload_btn.setObjectName("ActionButton")                                                                                      # Manual SFTP upload button
+        upload_btn.clicked.connect(lambda: self._animate_button_press(upload_btn))                                                    # Animate press before manual upload
+        upload_btn.clicked.connect(self._upload_rqi_csv_clicked)                                                                      # Trigger backend SFTP upload callback
+
+        refresh_btn = QPushButton("Refresh Upload Window")
+        refresh_btn.setObjectName("ActionButton")                                                                                     # Manual upload-window refresh button
+        refresh_btn.clicked.connect(lambda: self._animate_button_press(refresh_btn))                                                  # Animate press before refreshing the upload window
+        refresh_btn.clicked.connect(self._refresh_rqi_upload_window_clicked)                                                          # Trigger backend upload-window refresh callback
+
+        action_row.addStretch(1)                                                                                                      # Center the action buttons inside the current inner tab
+        action_row.addWidget(generate_btn)
+        action_row.addWidget(upload_btn)
+        action_row.addWidget(refresh_btn)
+        action_row.addStretch(1)                                                                                                      # Center the action buttons inside the current inner tab
+
+        return action_widget
 
     def _build_csv_sftp_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setSpacing(12)                                                                                                         # Comfortable spacing between sections in the renamed RQI export dashboard
+        layout.setSpacing(12)                                                                                                         # Space between heading and internal horizontal tabs
 
-        title = QLabel("RQI CSV / SFTP")
-        title.setObjectName("SectionTitle")                                                                                           # Main heading for RQI export controls shown only on this tab
+        title = QLabel("RQI Export Manager")
+        title.setObjectName("SectionTitle")                                                                                           # Humanized page heading for RQI CSV batching and SFTP uploads
 
-        subtitle = QLabel(
-            "Manage the RQI CSV export folder, time-window batching, and manual SFTP actions from this page."
-        )
-        subtitle.setWordWrap(True)                                                                                                    # Allow explanatory text to wrap naturally inside the content area
-        subtitle.setObjectName("SectionSubtitle")
+        subtitle = QLabel("Monitor RQI export activity, manage CSV batching, configure SFTP uploads, and run manual export actions.")
+        subtitle.setObjectName("SectionSubtitle")                                                                                     # Short explanation for this combined RQI export page
+        subtitle.setWordWrap(True)
 
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-
-        layout.addSpacing(8)
-
-        export_form = QFormLayout()
-        export_form.setLabelAlignment(Qt.AlignLeft)
-        export_form.setFormAlignment(Qt.AlignTop)
-        export_form.setSpacing(10)                                                                                                    # Keep form rows readable without taking too much vertical space
+        export_tabs = QTabWidget()
+        export_tabs.setObjectName("SettingsInnerTabs")                                                                                # Horizontal tabs inside the RQI Export Manager page
 
         # =========================
-        # Quick live status labels
+        # Hidden quick status labels
         # =========================
 
-        self.quick_status = QLabel("Checking status...")                                                                              # Quick automation status line used by existing refresh logic
-        self.quick_login = QLabel("Checking login state...")                                                                          # Quick AHA login status line used by existing refresh logic
-        self.quick_mode = QLabel("")                                                                                                  # Quick browser mode line used by existing refresh logic
-        self.quick_queue = QLabel("")                                                                                                 # Quick queue count line used by existing refresh logic
+        self.quick_status = QLabel("Checking status...")                                                                              # Hidden label used by existing _update_status logic
+        self.quick_login = QLabel("Checking login state...")                                                                          # Hidden label used by existing _update_login_status logic
+        self.quick_mode = QLabel("")                                                                                                  # Hidden label used by existing _update_status logic
+        self.quick_queue = QLabel("")                                                                                                 # Hidden label used by existing _update_status logic
 
-        self.quick_status.hide()                                                                                                      # Do not show automation status inside the RQI CSV / SFTP tab
-        self.quick_login.hide()                                                                                                       # Do not show AHA login inside the RQI CSV / SFTP tab
-        self.quick_mode.hide()                                                                                                        # Do not show browser mode inside the RQI CSV / SFTP tab
-        self.quick_queue.hide()                                                                                                       # Do not show queue count inside the RQI CSV / SFTP tab
+        self.quick_status.hide()                                                                                                      # Keep old quick-status backend compatibility without showing clutter
+        self.quick_login.hide()                                                                                                       # Keep old quick-login backend compatibility without showing clutter
+        self.quick_mode.hide()                                                                                                        # Keep old browser-mode backend compatibility without showing clutter
+        self.quick_queue.hide()                                                                                                       # Keep old queue backend compatibility without showing clutter
 
-        # ====================
-        # CSV export settings
-        # ====================
+        # ===========
+        # STATUS TAB
+        # ===========
+
+        status_page = QWidget()
+        status_layout = QVBoxLayout(status_page)
+        status_layout.setSpacing(14)
+
+        status_cards_grid = QGridLayout()
+        status_cards_grid.setHorizontalSpacing(12)
+        status_cards_grid.setVerticalSpacing(12)
+
+        self.rqi_batch_window_label = QLabel("Loading...")                                                                            # Shows current active batch window start and end time
+        self.rqi_batch_countdown_label = QLabel("Loading...")                                                                         # Shows live countdown until current batch window ends
+        self.rqi_current_csv_label = QLabel("Loading...")                                                                             # Shows currently active CSV batch file path
+        self.rqi_last_uploaded_local_label = QLabel("None yet")                                                                       # Shows most recent local CSV file uploaded successfully
+        self.rqi_last_uploaded_remote_label = QLabel("None yet")                                                                      # Shows most recent remote SFTP destination used successfully
+        self.rqi_last_upload_time_label = QLabel("None yet")                                                                          # Shows timestamp of most recent successful upload
+        self.rqi_last_upload_error_label = QLabel("None")                                                                             # Shows most recent upload error
+
+        status_cards = [
+            self._make_export_status_card("Current Batch Window", self.rqi_batch_window_label),
+            self._make_export_status_card("Time Remaining", self.rqi_batch_countdown_label),
+            self._make_export_status_card("Current CSV File", self.rqi_current_csv_label),
+            self._make_export_status_card("Last Uploaded Local File", self.rqi_last_uploaded_local_label),
+            self._make_export_status_card("Last Uploaded Remote Path", self.rqi_last_uploaded_remote_label),
+            self._make_export_status_card("Last Upload Time", self.rqi_last_upload_time_label),
+            self._make_export_status_card("Last Upload Error", self.rqi_last_upload_error_label),
+        ]                                                                                                                             # Status cards make the live information easier to scan than a long form
+
+        for index, card in enumerate(status_cards):
+            row = index // 2
+            col = index % 2
+            status_cards_grid.addWidget(card, row, col)                                                                               # Arrange status cards into a clean 2-column grid
+
+        status_layout.addLayout(status_cards_grid)
+        status_layout.addStretch(1)
+        status_layout.addWidget(self._make_export_action_bar())                                                                       # Manual actions stay inside the Status tab box
+
+        export_tabs.addTab(status_page, "Status")                                                                                     # First horizontal tab shows live status
+
+        # =================
+        # CSV SETTINGS TAB
+        # =================
+
+        csv_page = QWidget()
+        csv_layout = QVBoxLayout(csv_page)
+        csv_layout.setSpacing(12)
+
+        csv_form = QFormLayout()
+        csv_form.setLabelAlignment(Qt.AlignLeft)
+        csv_form.setFormAlignment(Qt.AlignTop)
+        csv_form.setSpacing(10)
 
         export_dir_row = QWidget()
         export_dir_layout = QHBoxLayout(export_dir_row)
         export_dir_layout.setContentsMargins(0, 0, 0, 0)
         export_dir_layout.setSpacing(8)
 
-        export_dir_edit = QLineEdit(os.getenv("RQI_CSV_EXPORT_DIR", ""))                                                             # Root folder where time-window CSV subfolders will be created
+        export_dir_edit = QLineEdit(os.getenv("RQI_CSV_EXPORT_DIR", ""))                                                              # Root folder where time-window CSV subfolders will be created
         self.entries["RQI_CSV_EXPORT_DIR"] = export_dir_edit                                                                          # Save widget reference so Save Settings writes it into the shared .env file
 
         browse_export_dir_btn = QPushButton("Browse")
-        browse_export_dir_btn.setObjectName("BrowseButton")                                                                          # Small helper button for choosing export folder from file dialog
-        browse_export_dir_btn.clicked.connect(lambda: self._animate_button_press(browse_export_dir_btn))                             # Animate press before folder chooser opens
-        browse_export_dir_btn.clicked.connect(self._browse_rqi_export_dir)                                                           # Open folder chooser and write result into export path field
+        browse_export_dir_btn.setObjectName("BrowseButton")                                                                           # Small helper button for choosing export folder from file dialog
+        browse_export_dir_btn.clicked.connect(lambda: self._animate_button_press(browse_export_dir_btn))                              # Animate press before folder chooser opens
+        browse_export_dir_btn.clicked.connect(self._browse_rqi_export_dir)                                                            # Open folder chooser and write result into export path field
 
         export_dir_layout.addWidget(export_dir_edit, 1)
         export_dir_layout.addWidget(browse_export_dir_btn)
 
-        export_form.addRow("CSV Export Folder", export_dir_row)
+        csv_form.addRow("CSV Export Folder", export_dir_row)
 
-        csv_filename_edit = QLineEdit(os.getenv("RQI_CSV_FILENAME", "rqi_export.csv"))                                               # Fixed file name used inside each date/time upload-window folder
+        csv_filename_edit = QLineEdit(os.getenv("RQI_CSV_FILENAME", "rqi_export.csv"))                                                # Fixed file name used inside each date/time upload-window folder
         self.entries["RQI_CSV_FILENAME"] = csv_filename_edit
-        export_form.addRow("CSV File Name", csv_filename_edit)
+        csv_form.addRow("CSV File Name", csv_filename_edit)
 
-        batch_minutes_edit = QLineEdit(os.getenv("RQI_CSV_BATCH_MINUTES", "15"))                                                     # Number of minutes per automatic CSV batch window
+        batch_minutes_edit = QLineEdit(os.getenv("RQI_CSV_BATCH_MINUTES", "15"))                                                      # Number of minutes per automatic CSV batch window
         self.entries["RQI_CSV_BATCH_MINUTES"] = batch_minutes_edit
-        export_form.addRow("Batch Minutes", batch_minutes_edit)
+        csv_form.addRow("Batch Minutes", batch_minutes_edit)
 
-        layout.addLayout(export_form)
+        csv_layout.addLayout(csv_form)
+        csv_layout.addStretch(1)
+        csv_layout.addWidget(self._make_export_action_bar())                                                                          # Manual actions stay visible inside CSV Settings tab
 
-        layout.addSpacing(6)
+        export_tabs.addTab(csv_page, "CSV Settings")                                                                                  # CSV folder/name/window settings
 
-        # =========================
-        # SFTP connection settings
-        # =========================
+        # ==================
+        # SFTP SETTINGS TAB
+        # ==================
 
-        sftp_title = QLabel("SFTP Settings")
-        sftp_title.setObjectName("SectionSubtitle")                                                                                   # Secondary heading for remote upload settings
-        layout.addWidget(sftp_title)
+        sftp_page = QWidget()
+        sftp_layout = QVBoxLayout(sftp_page)
+        sftp_layout.setSpacing(12)
 
         sftp_form = QFormLayout()
         sftp_form.setLabelAlignment(Qt.AlignLeft)
@@ -900,88 +995,21 @@ class SettingsWindow(QMainWindow):
             sftp_form.addRow(label, edit)
 
         sftp_password_edit = QLineEdit(os.getenv("RQI_SFTP_PASSWORD", ""))
-        sftp_password_edit.setEchoMode(QLineEdit.Password)                                                                            # Hide SFTP password in the GUI the same way AHA password is hidden
+        sftp_password_edit.setEchoMode(QLineEdit.Password)                                                                            # Hide SFTP password in the GUI
         self.entries["RQI_SFTP_PASSWORD"] = sftp_password_edit
         sftp_form.addRow("Password", sftp_password_edit)
 
-        layout.addLayout(sftp_form)
-        layout.addSpacing(8)
+        sftp_layout.addLayout(sftp_form)
+        sftp_layout.addStretch(1)
+        sftp_layout.addWidget(self._make_export_action_bar())                                                                         # Manual actions stay visible inside SFTP Settings tab
 
-        # =======================
-        # Live CSV / SFTP status
-        # =======================
+        export_tabs.addTab(sftp_page, "SFTP Settings")                                                                                # SFTP server credentials and remote file settings
 
-        csv_status_title = QLabel("Live CSV / Upload Status")
-        csv_status_title.setObjectName("SectionSubtitle")                                                                             # Secondary heading for current batch window and upload status information
-        layout.addWidget(csv_status_title)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(export_tabs, 1)
 
-        csv_status_form = QFormLayout()
-        csv_status_form.setLabelAlignment(Qt.AlignLeft)
-        csv_status_form.setFormAlignment(Qt.AlignTop)
-        csv_status_form.setSpacing(10)
-
-        self.rqi_batch_window_label = QLabel("Loading...")                                                                            # Shows current active batch window start and end time
-        self.rqi_batch_countdown_label = QLabel("Loading...")                                                                         # Shows live countdown until current batch window ends
-        self.rqi_current_csv_label = QLabel("Loading...")                                                                             # Shows currently active CSV batch file path
-        self.rqi_last_uploaded_local_label = QLabel("None yet")                                                                       # Shows most recent local CSV file that was uploaded successfully
-        self.rqi_last_uploaded_remote_label = QLabel("None yet")                                                                      # Shows most recent remote SFTP destination used successfully
-        self.rqi_last_upload_time_label = QLabel("None yet")                                                                          # Shows timestamp of most recent successful upload
-        self.rqi_last_upload_error_label = QLabel("")                                                                                 # Shows most recent upload error for debugging/feedback when upload fails
-
-        for status_label in [
-            self.rqi_batch_window_label,
-            self.rqi_batch_countdown_label,
-            self.rqi_current_csv_label,
-            self.rqi_last_uploaded_local_label,
-            self.rqi_last_uploaded_remote_label,
-            self.rqi_last_upload_time_label,
-            self.rqi_last_upload_error_label,
-        ]:
-            status_label.setWordWrap(True)                                                                                            # Allow long file paths and error messages to wrap cleanly inside the tab
-
-        csv_status_form.addRow("Current Batch Window", self.rqi_batch_window_label)
-        csv_status_form.addRow("Time Remaining", self.rqi_batch_countdown_label)
-        csv_status_form.addRow("Current CSV File", self.rqi_current_csv_label)
-        csv_status_form.addRow("Last Uploaded Local File", self.rqi_last_uploaded_local_label)
-        csv_status_form.addRow("Last Uploaded Remote Path", self.rqi_last_uploaded_remote_label)
-        csv_status_form.addRow("Last Upload Time", self.rqi_last_upload_time_label)
-        csv_status_form.addRow("Last Upload Error", self.rqi_last_upload_error_label)
-
-        layout.addLayout(csv_status_form)
-        layout.addSpacing(10)
-
-        # ======================
-        # Manual action buttons
-        # ======================
-
-        action_row = QHBoxLayout()
-        action_row.setContentsMargins(0, 0, 0, 0)
-        action_row.setSpacing(8)
-
-        self.generate_rqi_csv_btn = QPushButton("Generate CSV Now")
-        self.generate_rqi_csv_btn.setObjectName("ActionButton")                                                                       # Manual action button shown only on the csv_sftp tab
-        self.generate_rqi_csv_btn.clicked.connect(lambda: self._animate_button_press(self.generate_rqi_csv_btn))                      # Animate press before manual CSV generation
-        self.generate_rqi_csv_btn.clicked.connect(self._generate_rqi_csv_clicked)                                                     # Trigger backend CSV generation callback
-
-        self.upload_rqi_csv_btn = QPushButton("Upload to SFTP Now")
-        self.upload_rqi_csv_btn.setObjectName("ActionButton")                                                                         # Manual action button shown only on the csv_sftp tab
-        self.upload_rqi_csv_btn.clicked.connect(lambda: self._animate_button_press(self.upload_rqi_csv_btn))                          # Animate press before manual upload
-        self.upload_rqi_csv_btn.clicked.connect(self._upload_rqi_csv_clicked)                                                         # Trigger backend SFTP upload callback
-
-        self.refresh_rqi_window_btn = QPushButton("Refresh Upload Window")
-        self.refresh_rqi_window_btn.setObjectName("ActionButton")                                                                     # Manual action button shown only on the csv_sftp tab
-        self.refresh_rqi_window_btn.clicked.connect(lambda: self._animate_button_press(self.refresh_rqi_window_btn))                  # Animate press before refreshing the upload window
-        self.refresh_rqi_window_btn.clicked.connect(self._refresh_rqi_upload_window_clicked)                                          # Trigger backend upload-window refresh callback
-
-        action_row.addWidget(self.generate_rqi_csv_btn)
-        action_row.addWidget(self.upload_rqi_csv_btn)
-        action_row.addWidget(self.refresh_rqi_window_btn)
-        action_row.addStretch(1)                                                                                                      # Keep manual action buttons aligned neatly on the left
-
-        layout.addLayout(action_row)
-        layout.addStretch(1)                                                                                                          # Push all RQI export controls upward inside the page
-
-        self._add_sidebar_page(ScrollablePage(page), "RQI CSV / SFTP", "🏠")                                                         # Add sidebar page for RQI CSV & SFTP tab
+        self._add_sidebar_page(ScrollablePage(page), "RQI Export Manager", "🏠")                                                      # Add sidebar page for RQI export manager
 
 ###### DELETE THIS WHEN DONE TESTING NEW TAB LAYOUT - TEMPORARY START PAGE TO SHOW ALL QUICK STATUS INFO IN ONE PLACE #######################
     '''
@@ -2672,6 +2700,24 @@ class SettingsWindow(QMainWindow):
                 border: 1px solid #3b3d42;
                 border-radius: 14px;
                 padding: 2px;                                                                                                         /* Smaller visual footprint for compact dashboard cards */
+            }
+            QFrame#ExportStatusCard {
+                background-color: #25272c;
+                border: 1px solid #333842;
+                border-radius: 12px;
+                min-height: 64px;
+            }
+
+            QLabel#ExportStatusTitle {
+                color: #bfc5d2;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            QLabel#ExportStatusValue {
+                color: white;
+                font-size: 13px;
+                font-weight: 700;
             }
             QLabel#StatusCardTitle {
                 color: #bfc5d2;
