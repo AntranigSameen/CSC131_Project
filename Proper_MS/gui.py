@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import set_key, load_dotenv
 from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor, QPainter, QPen, QFont
+from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor, QPainter, QPen, QFont, QPixmap
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
                                QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, QCheckBox, QTabWidget,)
@@ -489,6 +489,39 @@ class SettingsWindow(QMainWindow):
 
         button._anim = anim                                                                                                           # Store reference to prevent garbage collection
 
+    def _add_soft_shadow(self, widget, blur=18, y_offset=3):
+        shadow = QGraphicsDropShadowEffect(self)                                                                                      # Soft visual depth effect for important panels/cards
+        shadow.setBlurRadius(blur)                                                                                                    # Higher blur makes the shadow softer
+        shadow.setOffset(0, y_offset)                                                                                                 # Slight downward shadow feels natural
+        shadow.setColor(QColor(15, 23, 42, 35))                                                                                       # Very subtle slate shadow for light mode
+        widget.setGraphicsEffect(shadow)                                                                                              # Apply shadow to target widget
+
+    def _add_button_shadow(self, button):
+        if button.objectName() == "ActionButton":
+            return                                                                                                                    # Keep RQI action buttons visually identical between light and dark mode
+        shadow = QGraphicsDropShadowEffect(self)                                                                                      # Soft depth effect for light-mode buttons
+        shadow.setBlurRadius(22)                                                                                                      # Softer than panel shadows
+        shadow.setOffset(0, 3)                                                                                                        # Small downward offset feels natural for buttons
+        shadow.setColor(QColor(15, 23, 42, 55))                                                                                       # Very subtle shadow so buttons do not look heavy
+        button.setGraphicsEffect(shadow)                                                                                              # Apply shadow to button
+
+    def _refresh_button_shadows(self):
+        buttons = [
+            getattr(self, "save_button", None),
+            getattr(self, "pause_button", None),
+            getattr(self, "restart_button", None),
+            getattr(self, "quit_button", None),
+        ]                                                                                                                            # Main persistent application buttons
+
+        for button in buttons:
+            if button is None:
+                continue                                                                                                              # Skip buttons that do not exist yet
+
+            if self.light_mode_enabled:
+                self._add_button_shadow(button)                                                                                       # Enable shadows in light mode
+            else:
+                button.setGraphicsEffect(None)                                                                                        # Remove shadows in dark mode
+
     # ==================
     # TRAY NOTIFICATION
     # ==================
@@ -502,84 +535,142 @@ class SettingsWindow(QMainWindow):
     # SIDEBAR SETUP
     # ==============
 
+    def _emoji_icon(self, emoji):
+        pixmap = QPixmap(24, 24)                                                                                                      # Create pixmap for emoji-based sidebar icon
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        font = QFont()
+        font.setPointSize(14)
+        painter.setFont(font)
+
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, emoji)                                                                       # Draw emoji centered into icon pixmap
+        painter.end()
+
+        return QIcon(pixmap)
+
     def _set_sidebar_page(self, index):
         self.page_stack.setCurrentIndex(index)                                                                                        # Show the selected page in the main content area
 
-        for i, button in enumerate(self.sidebar_buttons):
-            is_active = (i == index)
-            button.setChecked(is_active)                                                                                              # Highlight only the currently selected sidebar button
+        for item in self.sidebar_buttons:
+            is_active = item["page_index"] == index                                                                                   # Check whether this sidebar item is selected
 
-            if is_active:
-                glow = QGraphicsDropShadowEffect(self)
-                glow.setBlurRadius(18)                                                                                                # Soft active glow around selected sidebar button
-                glow.setOffset(0, 0)
-                button.setGraphicsEffect(glow)
-            else:
-                button.setGraphicsEffect(None)                                                                                        # Remove glow from non-active buttons
+            for button in (item["expanded"], item["collapsed"]):
+                button.setChecked(is_active)                                                                                          # Highlight both expanded/collapsed versions of selected page
+
+                if is_active:
+                    glow = QGraphicsDropShadowEffect(self)
+                    glow.setBlurRadius(18)                                                                                            # Soft active glow around selected sidebar button
+                    glow.setOffset(0, 0)
+                    button.setGraphicsEffect(glow)
+                else:
+                    button.setGraphicsEffect(None)                                                                                    # Remove glow from non-active buttons
 
         self._move_sidebar_indicator(index)                                                                                           # Move selected sidebar pill to the active button
 
     def _add_sidebar_page(self, page_widget, tooltip_text, icon_text):
         page_index = self.page_stack.addWidget(page_widget)                                                                           # Add page to stacked content area
 
-        button = QToolButton()
-        button.setObjectName("SidebarButton")
-        button.setText(icon_text)                                                                                                     # Use emoji/icon text inside circular sidebar button
-        button.setToolTip(tooltip_text)                                                                                               # Show page name when user hovers over icon
-        button.setCheckable(True)                                                                                                     # Allow active/selected button styling
-        button.setFixedSize(44, 44)                                                                                                   # Make sidebar button circular
-        button.setIconSize(QSize(18, 18))                                                                                             # Keep icon/text visually centered
-        button.clicked.connect(lambda checked=False, idx=page_index: self._set_sidebar_page(idx))                                     # Switch stacked page when icon is clicked
+        expanded_button = QPushButton()                                                                                               # QPushButton aligns expanded sidebar text better than QToolButton
+        expanded_button.sidebar_icon_text = icon_text                                                                                 # Store icon for expanded/collapsed sidebar states
+        expanded_button.sidebar_label_text = tooltip_text                                                                             # Store label for expanded sidebar state
+        expanded_button.sidebar_page_index = page_index                                                                               # Store page index for active-page tracking
+        expanded_button.setObjectName("SidebarButton")                                                                                # Stylesheet hook for expanded sidebar button
+        expanded_button.setText(f"{icon_text}  {tooltip_text}")                                                                       # Expanded sidebar shows icon plus page name
+        expanded_button.setToolTip(tooltip_text)                                                                                      # Show page name when hovering over sidebar item
+        expanded_button.setCheckable(True)                                                                                            # Allow active/selected styling
+        expanded_button.setFixedSize(203, 36)                                                                                         # Slim expanded sidebar row size
+        expanded_button.clicked.connect(lambda checked=False, idx=page_index: self._set_sidebar_page(idx))                            # Switch stacked page when clicked
 
-        self.sidebar_buttons.append(button)                                                                                           # Store sidebar buttons so selected state can be updated
-        self.sidebar_layout.addWidget(button)                                                                                         # Add circular icon button to left sidebar
+        collapsed_button = QToolButton()                                                                                              # QToolButton keeps collapsed icon-only tiles clean and centered
+        collapsed_button.sidebar_icon_text = icon_text                                                                                # Store icon for collapsed sidebar state
+        collapsed_button.sidebar_label_text = tooltip_text                                                                            # Store label for tooltip/reference
+        collapsed_button.sidebar_page_index = page_index                                                                              # Store page index for active-page tracking
+        collapsed_button.setObjectName("CollapsedSidebarButton")                                                                      # Stylesheet hook for collapsed sidebar button
+        collapsed_button.setText(icon_text)                                                                                           # Collapsed sidebar shows icon only
+        collapsed_button.setToolTip(tooltip_text)                                                                                     # Show page name when hovering over collapsed icon
+        collapsed_button.setCheckable(True)                                                                                           # Allow active/selected styling
+        collapsed_button.setFixedSize(50, 50)                                                                                         # Square collapsed icon tile size
+        collapsed_button.setToolButtonStyle(Qt.ToolButtonTextOnly)                                                                    # Keep emoji icon centered as text
+        collapsed_button.clicked.connect(lambda checked=False, idx=page_index: self._set_sidebar_page(idx))                           # Switch stacked page when clicked
+        collapsed_button.hide()                                                                                                       # Hide collapsed button because sidebar starts expanded
+
+        sidebar_item = {
+            "page_index": page_index,
+            "expanded": expanded_button,
+            "collapsed": collapsed_button,
+        }                                                                                                                             # Store both sidebar buttons as one logical sidebar item
+
+        self.sidebar_buttons.append(sidebar_item)                                                                                     # Store sidebar item so selected/collapsed state can be updated
+        self.sidebar_layout.addWidget(expanded_button)                                                                                # Add expanded button to sidebar layout
+        self.sidebar_layout.addWidget(collapsed_button)                                                                               # Add collapsed button to sidebar layout
 
     def _toggle_sidebar(self):
         self.sidebar_collapsed = not self.sidebar_collapsed                                                                           # Flip between expanded and collapsed sidebar states
+        self._refresh_sidebar_visual_state()                                                                                          # Apply correct sidebar sizing and labels for current state
+
+    def _refresh_sidebar_visual_state(self):
+        if not hasattr(self, "sidebar_buttons"):
+            return                                                                                                                    # Sidebar has not been created yet
 
         if self.sidebar_collapsed:
-            self.sidebar_frame.setFixedWidth(22)                                                                                      # Collapse sidebar down to a very thin rail
+            self.sidebar_frame.setFixedWidth(72)                                                                                      # Collapsed sidebar width for square icon tiles
             self.collapse_button.setText("»")                                                                                         # Show expand arrow while collapsed
             self.collapse_button.setToolTip("Expand Sidebar")
+            self.collapse_button.setFixedSize(50, 28)
 
-            for button in self.sidebar_buttons:
-                button.hide()                                                                                                         # Hide all sidebar page buttons when collapsed
+            for item in self.sidebar_buttons:
+                item["expanded"].hide()                                                                                               # Hide expanded text button while sidebar is collapsed
 
-            self.sidebar_indicator.hide()                                                                                             # Hide active page indicator when sidebar is collapsed
-
-            self.collapse_button.setFixedSize(16, 48)                                                                                 # Tall narrow expand button for collapsed state
-            self.collapse_button.setStyleSheet("")                                                                                    # Let normal stylesheet apply cleanly
+                collapsed_button = item["collapsed"]
+                collapsed_button.show()                                                                                               # Show collapsed icon-only button
+                collapsed_button.setFixedSize(50, 50)                                                                                 # Keep collapsed icon tile square
+                collapsed_button.setMinimumSize(50, 50)                                                                               # Prevent stylesheet/layout from shrinking icon tile
+                collapsed_button.setMaximumSize(50, 50)                                                                               # Prevent stylesheet/layout from stretching icon tile
 
         else:
-            self.sidebar_frame.setFixedWidth(68)                                                                                      # Restore normal sidebar width when expanded
+            self.sidebar_frame.setFixedWidth(225)                                                                                     # Expanded sidebar width for icon plus tab names
             self.collapse_button.setText("«")                                                                                         # Show collapse arrow while expanded
             self.collapse_button.setToolTip("Collapse Sidebar")
+            self.collapse_button.setFixedSize(188, 28)
 
-            self.collapse_button.setFixedSize(44, 28)                                                                                 # Restore top toggle button size
+            for item in self.sidebar_buttons:
+                item["collapsed"].hide()                                                                                              # Hide collapsed icon-only button while sidebar is expanded
 
-            for button in self.sidebar_buttons:
-                button.show()                                                                                                         # Show sidebar page buttons again when expanded
-                button.setFixedSize(44, 44)                                                                                           # Restore small circular button size
-                button.setStyleSheet("font-size: 18px;")                                                                              # Restore normal emoji size
+                expanded_button = item["expanded"]
+                expanded_button.show()                                                                                                # Show expanded icon plus label button
+                expanded_button.setFixedSize(203, 36)                                                                                 # Keep expanded row slim
+                expanded_button.setMinimumSize(203, 36)                                                                               # Prevent light/dark stylesheet from resizing row
+                expanded_button.setMaximumSize(203, 36)                                                                               # Prevent light/dark stylesheet from resizing row
 
-            self.sidebar_indicator.show()                                                                                             # Show active page indicator again
-            self._move_sidebar_indicator(self.page_stack.currentIndex())                                                              # Re-align active page indicator after expanding
+        self.sidebar_indicator.show()                                                                                                 # Keep selected page indicator visible
+        self._move_sidebar_indicator(self.page_stack.currentIndex())                                                                  # Re-align indicator after sidebar size changes
 
     def _move_sidebar_indicator(self, index):
         if not self.sidebar_buttons:
             return                                                                                                                    # Nothing to move if no sidebar buttons exist yet
 
-        if index < 0 or index >= len(self.sidebar_buttons):
+        active_item = None                                                                                                            # Track selected sidebar item
+
+        for item in self.sidebar_buttons:
+            if item["page_index"] == index:
+                active_item = item                                                                                                    # Found active sidebar item
+                break
+
+        if active_item is None:
             return                                                                                                                    # Ignore invalid page index
 
-        button = self.sidebar_buttons[index]
+        button = active_item["collapsed"] if self.sidebar_collapsed else active_item["expanded"]                                      # Use visible button for indicator position
+
         button_y = button.y()                                                                                                         # Vertical position of selected sidebar button
         button_h = button.height()                                                                                                    # Height of selected sidebar button
 
         pill_height = max(24, button_h - 10)                                                                                          # Make selected pill slightly smaller than the button
         pill_y = button_y + (button_h - pill_height) // 2                                                                             # Center pill vertically beside selected button
 
-        self.sidebar_indicator.setGeometry(4, pill_y, 4, pill_height)                                                                 # Move left-side selection pill to active button
+        self.sidebar_indicator.setGeometry(5, pill_y, 4, pill_height)                                                                 # Move left-side selection pill to active button
 
 
     def resizeEvent(self, event):
@@ -640,6 +731,7 @@ class SettingsWindow(QMainWindow):
 
         mini_logs_panel = QFrame()
         mini_logs_panel.setObjectName("MiniLogsPanel")                                                                                # Styled compact log viewer panel for top-right area
+        self._add_soft_shadow(mini_logs_panel)                                                                                        # Add subtle depth to top live-log panel
         mini_logs_panel.setFixedHeight(166)                                                                                           # Set Live Logs panel to match height of cards grid
         mini_logs_panel.setMaximumHeight(166)                                                                                         # Keep mini live logs same height in light and dark mode
         mini_logs_panel.setMinimumHeight(166)                                                                                         # Prevent stylesheet/layout changes from making mini logs taller
@@ -678,13 +770,19 @@ class SettingsWindow(QMainWindow):
         self.save_btn = QPushButton("Save Settings")
         self.save_btn.setObjectName("SaveButton")                                                                                     # Used by stylesheet for save button
 
+        self._add_button_shadow(self.save_btn)                                                                                        # Add subtle light-mode depth to Save button
+
         self.restart_btn = QPushButton("Restart App")
         self.restart_btn.setObjectName("RestartButton")                                                                               # Used by stylesheet for restart button
-        self.restart_btn.setFixedHeight(26)
+        self.restart_btn.setFixedHeight(32)
+
+        self._add_button_shadow(self.restart_btn)                                                                                     # Add subtle depth to Restart button
 
         self.quit_btn = QPushButton("Quit")
         self.quit_btn.setObjectName("QuitButton")                                                                                     # Used by stylesheet for quit button
-        self.quit_btn.setFixedHeight(26)
+        self.quit_btn.setFixedHeight(32)
+    
+        self._add_button_shadow(self.quit_btn)                                                                                        # Add subtle depth to Quit button
 
         self.aha_required_label = QLabel("AHA login required")
         self.aha_required_label.setObjectName("AHARequiredLabel")                                                                     # Red warning label shown when no AHA login exists
@@ -719,6 +817,8 @@ class SettingsWindow(QMainWindow):
         self.pause_btn.setObjectName("PauseButton")                                                                                   # Main quick-action button for pausing/resuming all automation
         self.pause_btn.setFixedHeight(24)
         self.pause_btn.setMinimumWidth(112)
+
+        self._add_button_shadow(self.pause_btn)                                                                                       # Add subtle depth to Pause button
 
         self.pause_menu_btn = QToolButton()
         self.pause_menu_btn.setFixedWidth(24)                                                                                         # Narrow arrow button
@@ -785,11 +885,12 @@ class SettingsWindow(QMainWindow):
 
         self.sidebar_frame = QFrame()
         self.sidebar_frame.setObjectName("SidebarFrame")                                                                              # Styled container for left-side circular navigation buttons
-        self.sidebar_frame.setFixedWidth(68)                                                                                          # Thin sidebar width for compact icon rail
+        self._add_soft_shadow(self.sidebar_frame)                                                                                     # Add subtle depth to sidebar container
+        self.sidebar_frame.setFixedWidth(225)                                                                                         # Thin sidebar width for compact icon rail
         self.sidebar_collapsed = False                                                                                                # Track whether sidebar is collapsed
 
         self.sidebar_layout = QVBoxLayout(self.sidebar_frame)
-        self.sidebar_layout.setContentsMargins(10, 10, 10, 10)
+        self.sidebar_layout.setContentsMargins(8, 10, 8, 10)
         self.sidebar_layout.setSpacing(10)                                                                                            # Tight spacing between smaller circular buttons
         self.sidebar_layout.setAlignment(Qt.AlignTop)
 
@@ -797,7 +898,7 @@ class SettingsWindow(QMainWindow):
         self.collapse_button.setObjectName("SidebarCollapseButton")
         self.collapse_button.setText("«")                                                                                             # Collapse arrow shown at top of sidebar
         self.collapse_button.setToolTip("Collapse Sidebar")
-        self.collapse_button.setFixedSize(44, 28)
+        self.collapse_button.setFixedSize(188, 28)
         self.collapse_button.clicked.connect(self._toggle_sidebar)                                                                    # Collapse or expand left sidebar when clicked
         self.sidebar_layout.addWidget(self.collapse_button, alignment=Qt.AlignTop | Qt.AlignHCenter)                                  # Keep collapse/expand button pinned at the top of the sidebar
 
@@ -845,6 +946,7 @@ class SettingsWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self._move_sidebar_indicator(0))                                                             # Reposition selected pill after layout finishes
 
         self._apply_styles()                                                                                                          # Apply full application stylesheet
+        self._refresh_sidebar_visual_state()                                                                                          # Make initial sidebar sizing consistent with selected theme
 
     # ==============
     # TAB BUILDERS
@@ -880,23 +982,26 @@ class SettingsWindow(QMainWindow):
         action_widget.setObjectName("ExportActionBar")                                                                                # Manual action bar shown inside each RQI Export Manager inner tab
 
         action_row = QHBoxLayout(action_widget)
-        action_row.setContentsMargins(0, 8, 0, 0)
+        action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(8)
 
         generate_btn = QPushButton("Generate CSV Now")
         generate_btn.setObjectName("ActionButton")                                                                                    # Manual CSV generation button
         generate_btn.clicked.connect(lambda: self._animate_button_press(generate_btn))                                                # Animate press before manual CSV generation
         generate_btn.clicked.connect(self._generate_rqi_csv_clicked)                                                                  # Trigger backend CSV generation callback
+        self._add_button_shadow(generate_btn)                                                                                         # Add subtle depth to action button
 
         upload_btn = QPushButton("Upload to SFTP Now")
         upload_btn.setObjectName("ActionButton")                                                                                      # Manual SFTP upload button
         upload_btn.clicked.connect(lambda: self._animate_button_press(upload_btn))                                                    # Animate press before manual upload
         upload_btn.clicked.connect(self._upload_rqi_csv_clicked)                                                                      # Trigger backend SFTP upload callback
+        self._add_button_shadow(upload_btn)                                                                                           # Add subtle depth to action button
 
         refresh_btn = QPushButton("Refresh Upload Window")
         refresh_btn.setObjectName("ActionButton")                                                                                     # Manual upload-window refresh button
         refresh_btn.clicked.connect(lambda: self._animate_button_press(refresh_btn))                                                  # Animate press before refreshing the upload window
         refresh_btn.clicked.connect(self._refresh_rqi_upload_window_clicked)                                                          # Trigger backend upload-window refresh callback
+        self._add_button_shadow(refresh_btn)                                                                                          # Add subtle depth to action button
 
         action_row.addStretch(1)                                                                                                      # Center the action buttons inside the current inner tab
         action_row.addWidget(generate_btn)
@@ -972,7 +1077,8 @@ class SettingsWindow(QMainWindow):
 
         status_layout.addLayout(status_cards_grid)
         status_layout.addStretch(1)
-        status_layout.addWidget(self._make_export_action_bar())                                                                       # Manual actions stay inside the Status tab box
+        status_layout.addWidget(self._make_export_action_bar(), 0, Qt.AlignHCenter)                                                   # Manual actions stay inside the Status tab box
+        status_layout.addSpacing(14)                                                                                                  # Extra space at the bottom of the status tab for visual balance
 
         export_tabs.addTab(status_page, "Status")                                                                                     # First horizontal tab shows live status
 
@@ -1255,7 +1361,10 @@ class SettingsWindow(QMainWindow):
         load_dotenv(CONFIG_FILE, override=True)                                                                                       # Reload current process environment after saving theme
 
         self.theme_label.setText("Light" if self.is_light_mode else "Dark")                                                           # Update visible theme text
+
         self._apply_styles()                                                                                                          # Re-apply stylesheet using selected theme
+        self._refresh_sidebar_visual_state()                                                                                          # Re-apply sidebar size/state after theme stylesheet changes
+        self._refresh_button_shadows()                                                                                                # Enable/disable button shadows depending on active theme
 
     # ==================
     # MANUAL EMAILER TAB
@@ -2656,22 +2765,23 @@ class SettingsWindow(QMainWindow):
                 padding: 2px;                                                                                                         /* Smaller visual footprint for compact dashboard cards */
             }
             QFrame#ExportStatusCard {
-                background-color: #25272c;
-                border: 1px solid #333842;
+                background-color: #252a33;
+                border: 1px solid #343b48;
                 border-radius: 12px;
-                min-height: 64px;
             }
 
             QLabel#ExportStatusTitle {
-                color: #bfc5d2;
+                color: #aeb7c4;
                 font-size: 12px;
                 font-weight: 600;
+                background-color: transparent;
             }
 
             QLabel#ExportStatusValue {
-                color: white;
-                font-size: 13px;
+                color: #f3f6fb;
+                font-size: 14px;
                 font-weight: 700;
+                background-color: transparent;
             }
             QLabel#StatusCardTitle {
                 color: #bfc5d2;
@@ -2691,9 +2801,9 @@ class SettingsWindow(QMainWindow):
                 spacing: 8px;
             }                           
             QFrame#SidebarFrame {
-                background-color: #20242c;
-                border: 1px solid #323844;
-                border-radius: 14px;
+                background-color: #1f242d;
+                border: 1px solid #333842;
+                border-radius: 12px;
             }
             QFrame#SidebarIndicator {
                 background-color: #00bc8c;
@@ -2717,26 +2827,49 @@ class SettingsWindow(QMainWindow):
                 background-color: #31343a;
                 border: 1px solid #5dade2;
             }
-            QToolButton#SidebarButton {
-                background-color: #1b1d21;
+            QPushButton#SidebarButton {
+                background-color: transparent;
+                color: #d8dee9;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                padding-left: 14px;
+                padding-right: 8px;
+                text-align: left;
+            }
+
+            QPushButton#SidebarButton:hover {
+                background-color: #252b33;
                 color: white;
-                border: 1px solid #353840;
-                border-radius: 22px;                                                                                                  /* Half of 44px to make perfect circle */
-                font-size: 18px;
+            }
+
+            QPushButton#SidebarButton:checked {
+                background-color: #00bc8c;
+                color: white;
+                font-weight: 600;
+                border: none;
+                border-radius: 8px;
+            }
+            QToolButton#CollapsedSidebarButton {
+                background-color: transparent;
+                color: #d8dee9;
+                border: none;
+                border-radius: 0px;
+                font-size: 20px;
                 font-weight: 600;
                 padding: 0px;
             }
-            QToolButton#SidebarButton:hover {
-                background-color: #2f6feb;
-                border: 1px solid #7fb3ff;
+
+            QToolButton#CollapsedSidebarButton:hover {
+                background-color: rgba(255, 255, 255, 18);
+                border: none;
             }
-            QToolButton#SidebarButton:checked {
+
+            QToolButton#CollapsedSidebarButton:checked {
                 background-color: #00bc8c;
-                border: 1px solid #5ff0bf;
-            }
-            QToolButton#SidebarButton:checked:hover {
-                background-color: #11c995;
-                border: 1px solid #7ff7d0;
+                color: white;
+                border: none;
+                border-radius: 0px;
             }
             QToolTip {
                 background-color: #111317;
@@ -2759,11 +2892,16 @@ class SettingsWindow(QMainWindow):
 
             QPushButton#SaveButton {
                 background-color: #00bc8c;
-                padding: 8px 18px;                                                                                                    /* Slightly wider bottom-centered save button */
-                min-width: 150px;                                                                                                     /* Gives bottom save button a more intentional centered look */
+                color: white;
+                min-width: 170px;
+                padding: 7px 14px;
+                border-radius: 10px;
+                font-weight: 700;
             }
             QPushButton#SaveButton:hover {
                 background-color: #17d7a0;
+                padding-top: 6px;
+                padding-bottom: 8px;
             }
 
             QPushButton#PauseButton {
@@ -2775,9 +2913,14 @@ class SettingsWindow(QMainWindow):
                 border-top-right-radius: 0px;                                                                                         /* No rounding where it joins dropdown */
                 border-bottom-right-radius: 0px;
                 padding: 0 10px;
-                font-weight: 600;
+                font-weight: 700;
             }
-            QPushButton#PauseButton:hover {background-color: #ffb52e;}
+                           
+            QPushButton#PauseButton:hover {
+                background-color: #ffb52e;
+                padding-top: 6px;
+                padding-bottom: 8px;
+            }
                            
             QPushButton#PauseButton:pressed {
                 background-color: #de9210;                                                                                            /* Pressed state */
@@ -2806,8 +2949,18 @@ class SettingsWindow(QMainWindow):
                 width: 0px;                                                                                                           /* Remove reserved arrow space */
             }
 
-            QPushButton#RestartButton {background-color: #e67e22;}
-            QPushButton#RestartButton:hover {background-color: #f39c12;}
+            QPushButton#RestartButton {
+                background-color: #e67e22;
+                color: white;
+                padding: 7px 14px;
+                border-radius: 10px;
+                font-weight: 700;
+            }
+            QPushButton#RestartButton:hover {
+                background-color: #f39c12;
+                padding-top: 6px;
+                padding-bottom: 8px;
+                }
 
             QPushButton#SignOutButton {
                 background-color: #3498db;
@@ -2817,12 +2970,30 @@ class SettingsWindow(QMainWindow):
                 font-size: 11px;                                                                                                      /* Match smaller button height */
                 font-weight: 600;
             }
-            QPushButton#SignOutButton:hover {background-color: #5dade2;}
+            QPushButton#SignOutButton:hover {
+                background-color: #5dade2;
+                padding-top: 6px;
+                padding-bottom: 8px;
+            }
 
-            QPushButton#QuitButton {background-color: #e64e30;}
-            QPushButton#QuitButton:hover {background-color: #ff6b57;}
+            QPushButton#QuitButton {
+                background-color: #e64e30;
+                color: white;
+                padding: 7px 14px;
+                border-radius: 10px;
+                font-weight: 700;
+            }
+            QPushButton#QuitButton:hover {
+                background-color: #ff6b57;
+                padding-top: 6px;
+                padding-bottom: 8px;
+            }
             
-            QPushButton:hover {background-color: #3b82f6;}
+            QPushButton:hover {
+                background-color: #3b82f6;
+                padding-top: 6px;
+                padding-bottom: 8px;
+            }
     
             QLabel#SectionTitle {
                 color: white;
@@ -2878,6 +3049,8 @@ class SettingsWindow(QMainWindow):
             }
             QPushButton#ActionButton:hover {
                 background-color: #6f7cff;
+                padding-top: 6px;
+                padding-bottom: 8px;
             }               
 
             QFrame#MiniLogsPanel {
@@ -2991,6 +3164,10 @@ class SettingsWindow(QMainWindow):
                 border: 1px solid #d5dce8;
                 border-radius: 12px;
             }
+                           
+            QLabel {
+                background-color: transparent;                                                                                        /* Prevent labels from showing unwanted gray background boxes in light mode */
+            }
 
             QLabel#SectionTitle {
                 color: #111827;
@@ -3009,6 +3186,7 @@ class SettingsWindow(QMainWindow):
                 color: #374151;
                 font-size: 12px;
                 font-weight: 600;
+                background-color: transparent;
             }
 
             QLabel#StatusCardValue,
@@ -3026,10 +3204,18 @@ class SettingsWindow(QMainWindow):
             QSpinBox {
                 background-color: #ffffff;
                 color: #111827;
-                border: 1px solid #c8d0dc;
-                border-radius: 10px;
-                padding: 8px;
+                border: 1px solid #d1d8e3;
+                border-radius: 8px;
+                padding: 7px;
                 selection-background-color: #3498db;
+            }
+
+            QLineEdit:hover,
+            QPlainTextEdit:hover,
+            QTextEdit:hover,
+            QComboBox:hover,
+            QSpinBox:hover {
+                border: 1px solid #b8c2d1;
             }
 
             QLineEdit:focus,
@@ -3038,6 +3224,7 @@ class SettingsWindow(QMainWindow):
             QComboBox:focus,
             QSpinBox:focus {
                 border: 1px solid #3498db;
+                background-color: #fbfdff;
             }
 
             QPlainTextEdit#MiniLogText {
@@ -3053,20 +3240,32 @@ class SettingsWindow(QMainWindow):
             QPushButton {
                 background-color: #3498db;
                 color: white;
-                border: none;
+                border: 1 px solid transparent;
                 border-radius: 10px;
                 padding: 7px 14px;
                 font-weight: 700;
             }
 
             QPushButton:hover {
+                padding-top: 6px;
+                padding-bottom: 8px;           
                 background-color: #2d89c8;
             }
-
+            
+            QPushButton:pressed {
+                background-color: #2477ad;
+            }
+                           
             QPushButton#SaveButton {
                 background-color: #00bc8c;
                 color: white;
                 min-width: 170px;
+            }
+                           
+            QPushButton#SaveButton:hover {
+                background-color: #00a77d;
+                padding-top: 6px;
+                padding-bottom: 8px;
             }
 
             QPushButton#PauseButton {
@@ -3076,6 +3275,16 @@ class SettingsWindow(QMainWindow):
                 border-bottom-right-radius: 0px;
             }
 
+            QPushButton#PauseButton:hover {
+                background-color: #db8b0f;
+                padding-top: 6px;
+                padding-bottom: 8px;
+            }
+
+            QPushButton#PauseButton:pressed {
+                background-color: #c77b0c;
+            }
+                           
             QToolButton#PauseMenuButton {
                 background-color: #f39c12;
                 color: white;
@@ -3085,44 +3294,112 @@ class SettingsWindow(QMainWindow):
                 border-bottom-right-radius: 10px;
             }
 
+            QToolButton#PauseMenuButton:hover {
+                background-color: #db8b0f;
+                border-left: 1px solid rgba(255,255,255,120);                                                                          /* Match Pause button hover */
+            }
+
+            QToolButton#PauseMenuButton:pressed {
+                background-color: #c77b0c;
+            }
+                           
             QPushButton#QuitButton {
                 background-color: #e64e30;
                 color: white;
             }
 
+            QPushButton#QuitButton:hover {
+                background-color: #cf4328;
+                padding-top: 6px;
+                padding-bottom: 8px;
+            }
+                           
             QPushButton#RestartButton {
                 background-color: #f39c12;
                 color: white;
             }
 
+            QPushButton#RestartButton:hover {
+                background-color: #db8b0f;
+                padding-top: 6px;
+                padding-bottom: 8px;
+            }
+                           
             QPushButton#SignOutButton {
                 background-color: #3498db;
                 color: white;
             }
 
+            QPushButton#SignOutButton:hover {
+                background-color: #2d89c8;
+                padding-top: 6px;
+                padding-bottom: 8px;
+            }
+                           
             QPushButton#ActionButton {
                 background-color: #5865f2;
                 color: white;
                 min-width: 160px;
+                min-height: 18px;
+                padding: 7px 14px;
+                border-radius: 10px;
+                font-weight: 600;
+                border: none;
             }
 
-            QToolButton#SidebarButton {
-                background-color: #ffffff;
+            QPushButton#ActionButton:hover {
+                background-color: #4752c4;
+            }
+
+            QPushButton#ActionButton:pressed {
+                background-color: #3c45aa;
+            }
+                           
+            QPushButton#SidebarButton {
+                background-color: transparent;
+                color: #1f2937;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 400;
+                padding-left: 14px;
+                padding-right: 8px;
+                text-align: left;
+            }
+
+            QPushButton#SidebarButton:hover {
+                background-color: #eef3f8;
                 color: #111827;
-                border: 1px solid #d5dce8;
-                border-radius: 22px;
-                font-size: 18px;
             }
 
-            QToolButton#SidebarButton:checked {
+            QPushButton#SidebarButton:checked {
                 background-color: #00bc8c;
                 color: white;
+                font-weight: 600;
+                border: none;
+                border-radius: 8px;
+            }
+            QToolButton#CollapsedSidebarButton {
+                background-color: transparent;
+                color: #1f2937;
+                border: none;
+                border-radius: 0px;
+                font-size: 20px;
+                font-weight: 600;
+                padding: 0px;
             }
 
-            QToolButton#SidebarButton:hover {
-                background-color: #eef2f7;
+            QToolButton#CollapsedSidebarButton:hover {
+                background-color: #737270;
+                border: none;
             }
 
+            QToolButton#CollapsedSidebarButton:checked {
+                background-color: #00bc8c;
+                color: white;
+                border: none;
+                border-radius: 0px;
+            }
             QFrame#SidebarIndicator {
                 background-color: #00bc8c;
                 border-radius: 2px;
@@ -3180,6 +3457,61 @@ class SettingsWindow(QMainWindow):
 
             QScrollArea > QWidget > QWidget {
                 background-color: #f5f7fb;
+            }
+            QScrollBar:vertical {
+                background-color: transparent;
+                width: 10px;
+                margin: 2px;
+            }
+
+            QScrollBar::handle:vertical {
+                background-color: #cbd5e1;
+                border-radius: 5px;
+                min-height: 28px;
+            }
+
+            QScrollBar::handle:vertical:hover {
+                background-color: #94a3b8;
+            }
+
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+                background: none;
+                border: none;
+            }
+
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: none;
+            }
+
+            QScrollBar:horizontal {
+                background-color: transparent;
+                height: 10px;
+                margin: 2px;
+            }
+
+            QScrollBar::handle:horizontal {
+                background-color: #cbd5e1;
+                border-radius: 5px;
+                min-width: 28px;
+            }
+
+            QScrollBar::handle:horizontal:hover {
+                background-color: #94a3b8;
+            }
+
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal {
+                width: 0px;
+                background: none;
+                border: none;
+            }
+
+            QScrollBar::add-page:horizontal,
+            QScrollBar::sub-page:horizontal {
+                background: none;
             }
         """)
 
