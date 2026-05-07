@@ -934,8 +934,7 @@ class SettingsWindow(QMainWindow):
 
         self._build_csv_sftp_tab()                                                                                                    # RQI CSV & SFTP page
         self._build_credentials_tab()                                                                                                 # Credential management page
-        self._build_reminder_emails_tab()                                                                                             # Reminder Emails page
-        self._build_manual_emailer_tab()                                                                                              # Manual Email Sender page
+        self._build_reminders_tab()                                                                                                   # Combined Reminder Emails and Manual Emailer page
         self._build_location_keys_tab()                                                                                               # Location key mapping page
         self._build_location_templates_tab()                                                                                          # Location email template editor page
         self._build_location_tracker_tab()                                                                                            # Location email tracker audit page
@@ -947,6 +946,24 @@ class SettingsWindow(QMainWindow):
 
         self._apply_styles()                                                                                                          # Apply full application stylesheet
         self._refresh_sidebar_visual_state()                                                                                          # Make initial sidebar sizing consistent with selected theme
+
+    # ====================
+    # THEME TOGGLE BUTTON
+    # ====================
+
+    def _toggle_theme_mode(self):
+        self.is_light_mode = self.theme_toggle.isChecked()                                                                            # Checked means light mode
+
+        theme_value = "light" if self.is_light_mode else "dark"
+        set_key(CONFIG_FILE, "APP_THEME", theme_value)                                                                                # Save selected theme into .env immediately
+        load_dotenv(CONFIG_FILE, override=True)                                                                                       # Reload current process environment after saving theme
+
+        self.theme_label.setText("Light" if self.is_light_mode else "Dark")                                                           # Update visible theme text
+
+        self._apply_styles()                                                                                                          # Re-apply stylesheet using selected theme
+        self._refresh_sidebar_visual_state()                                                                                          # Re-apply sidebar size/state after theme stylesheet changes
+        self._refresh_button_shadows()                                                                                                # Enable/disable button shadows depending on active theme
+
 
     # ==============
     # TAB BUILDERS
@@ -1281,14 +1298,52 @@ class SettingsWindow(QMainWindow):
 
         self._add_sidebar_page(ScrollablePage(page), "Credentials Management", "🔐")                                                  # One sidebar button for AHA, Email, and Browser Mode
 
-    # ===================
-    # REMINDER EMAILS TAB
-    # ===================
+    # ==============
+    # REMINDERS TAB
+    # ==============
 
-    def _build_reminder_emails_tab(self):
+    def _build_reminders_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)                                                                                                         # Comfortable spacing between heading and reminder subtabs
+
+        title = QLabel("Reminders")
+        title.setObjectName("SectionTitle")                                                                                           # Main heading for all reminder-related tools
+
+        subtitle = QLabel("Manage automatic reminder email templates and send manual reminder emails.")
+        subtitle.setObjectName("SectionSubtitle")                                                                                     # Short explanation for the combined reminders page
+        subtitle.setWordWrap(True)
+
+        reminder_tabs = QTabWidget()
+        reminder_tabs.setObjectName("SettingsInnerTabs")                                                                              # Horizontal tabs inside the Reminders sidebar page
+        reminder_tabs.setMinimumHeight(0)                                                                                             # Prevent Reminders inner tab widget from pushing into the top controls
+        reminder_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)                                                       # Let inner tab pages scroll instead of making the whole page too tall
+
+        reminder_email_page = self._make_reminder_emails_page()                                                                       # Automatic reminder email settings/template editor
+        manual_email_page = self._make_manual_emailer_page()                                                                          # Manual email sending tools
+
+        reminder_email_scroll = ScrollablePage(reminder_email_page)                                                                   # Reminder Emails tab gets its own scroll area
+        reminder_email_scroll.setMinimumHeight(0)                                                                                     # Prevent inner scroll page from forcing the whole app taller
+        reminder_email_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)                                               # Allow tab content to shrink instead of clipping top buttons
+
+        manual_email_scroll = ScrollablePage(manual_email_page)                                                                       # Manual Emailer tab gets its own scroll area
+        manual_email_scroll.setMinimumHeight(0)                                                                                       # Prevent inner scroll page from forcing the whole app taller
+        manual_email_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)                                                 # Allow tab content to scroll instead of expanding the main window
+
+        reminder_tabs.addTab(reminder_email_scroll, "Reminder Emails")                                                                # First horizontal tab for automated reminder templates
+        reminder_tabs.addTab(manual_email_scroll, "Manual Emailer")                                                                   # Second horizontal tab for manual sending
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(reminder_tabs, 1)
+
+        self._add_sidebar_page(page, "Reminders", "⏰")                                                                               # One sidebar button for all reminder tools
+
+    def _make_reminder_emails_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setSpacing(12)                                                                                                         # Comfortable spacing between reminder timing controls and email body editors
+        layout.setAlignment(Qt.AlignTop)                                                                                              # Keep Reminder Emails controls stacked at the top instead of spreading vertically
 
         form = QFormLayout()
         form.setSpacing(10)
@@ -1323,7 +1378,8 @@ class SettingsWindow(QMainWindow):
         self.not_registered_email_body_edit = QPlainTextEdit()
         self.not_registered_email_body_edit.setPlaceholderText("Type the email body for non-registered users here...")                # Guide the user on what belongs in this editor
         self.not_registered_email_body_edit.setPlainText(read_template_file(NOT_REGISTERED_TEMPLATE_FILE))                            # Load saved non-registered reminder email template from text file
-        self.not_registered_email_body_edit.setMinimumHeight(160)                                                                     # Make editor large enough to comfortably write an email body
+        self.not_registered_email_body_edit.setFixedHeight(120)                                                                       # Clean compact default editor height for reminder templates
+        self.not_registered_email_body_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)                                   # Prevent vertical layout from stretching this editor        
         self.entries["ACUITY_NOT_REGISTERED_EMAIL_BODY_TEMPLATE"] = self.not_registered_email_body_edit                               # Save editor through template-file logic in save_settings()
 
         layout.addWidget(not_registered_body_title)
@@ -1339,43 +1395,23 @@ class SettingsWindow(QMainWindow):
         self.registered_email_body_edit = QPlainTextEdit()
         self.registered_email_body_edit.setPlaceholderText("Type the email body for registered users here...")                        # Guide the user on what belongs in this editor
         self.registered_email_body_edit.setPlainText(read_template_file(REGISTERED_TEMPLATE_FILE))                                    # Load saved registered reminder email template from text file
-        self.registered_email_body_edit.setMinimumHeight(160)                                                                         # Make editor large enough to comfortably write an email body
+        self.registered_email_body_edit.setFixedHeight(120)                                                                           # Clean compact default editor height for reminder templates
+        self.registered_email_body_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)                                       # Prevent vertical layout from stretching this editor        
         self.entries["ACUITY_REGISTERED_EMAIL_BODY_TEMPLATE"] = self.registered_email_body_edit                                       # Save editor through template-file logic in save_settings()
 
         layout.addWidget(registered_body_title)
         layout.addWidget(self.registered_email_body_edit)
+        self.registered_email_body_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)                                       # Prevent editor row from vertically stretching and creating huge empty gaps
 
-        layout.addStretch(1)                                                                                                          # Push reminder email controls upward so page feels tidy
+        return page                                                                                                                   # Return page so it can be placed inside the Reminders horizontal tab
 
-        self._add_sidebar_page(ScrollablePage(page), "Reminder Emails", "⏰")                                                         # Add Reminder Emails page to sidebar navigation
-
-    # ====================
-    # THEME TOGGLE BUTTON
-    # ====================
-
-    def _toggle_theme_mode(self):
-        self.is_light_mode = self.theme_toggle.isChecked()                                                                            # Checked means light mode
-
-        theme_value = "light" if self.is_light_mode else "dark"
-        set_key(CONFIG_FILE, "APP_THEME", theme_value)                                                                                # Save selected theme into .env immediately
-        load_dotenv(CONFIG_FILE, override=True)                                                                                       # Reload current process environment after saving theme
-
-        self.theme_label.setText("Light" if self.is_light_mode else "Dark")                                                           # Update visible theme text
-
-        self._apply_styles()                                                                                                          # Re-apply stylesheet using selected theme
-        self._refresh_sidebar_visual_state()                                                                                          # Re-apply sidebar size/state after theme stylesheet changes
-        self._refresh_button_shadows()                                                                                                # Enable/disable button shadows depending on active theme
-
-    # ==================
-    # MANUAL EMAILER TAB
-    # ==================
-
-    def _build_manual_emailer_tab(self):
+    def _make_manual_emailer_page(self):
         from manual_email_handler import get_available_locations
         
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignTop)                                                                                              # Keep reminder controls stacked at the top instead of spreading vertically
 
         title = QLabel("Manual Email Sender")
         title.setObjectName("SectionTitle")
@@ -1442,16 +1478,18 @@ class SettingsWindow(QMainWindow):
         button_row = QHBoxLayout()
         button_row.setSpacing(10)
 
-        self.manual_preview_btn = QPushButton("📋 Preview Email")
+        self.manual_preview_btn = QPushButton("Preview Email")
+        self.manual_preview_btn.setObjectName("ActionButton")                                                                         # Match RQI Export Manager action button styling
         self.manual_preview_btn.clicked.connect(self._preview_manual_email)
         button_row.addWidget(self.manual_preview_btn)
 
-        self.manual_send_btn = QPushButton("📧 Send Email")
+        self.manual_send_btn = QPushButton("Send Email")
         self.manual_send_btn.clicked.connect(self._send_manual_email)
-        self.manual_send_btn.setObjectName("PrimaryButton")
+        self.manual_send_btn.setObjectName("ActionButton")
         button_row.addWidget(self.manual_send_btn)
 
-        self.manual_refresh_locations_btn = QPushButton("🔄 Refresh Locations")
+        self.manual_refresh_locations_btn = QPushButton("Refresh Locations")
+        self.manual_refresh_locations_btn.setObjectName("ActionButton")                                                               # Match RQI Export Manager action button styling
         self.manual_refresh_locations_btn.clicked.connect(self._refresh_manual_location_combo)
         button_row.addWidget(self.manual_refresh_locations_btn)
 
@@ -1471,10 +1509,12 @@ class SettingsWindow(QMainWindow):
         batch_row.addWidget(self.manual_csv_path_label, 1)
 
         self.manual_browse_csv_btn = QPushButton("Browse...")
+        self.manual_browse_csv_btn.setObjectName("ActionButton")
         self.manual_browse_csv_btn.clicked.connect(self._browse_manual_csv)
         batch_row.addWidget(self.manual_browse_csv_btn)
 
-        self.manual_send_batch_btn = QPushButton("📧 Send Batch")
+        self.manual_send_batch_btn = QPushButton("Send Batch")
+        self.manual_send_batch_btn.setObjectName("ActionButton")
         self.manual_send_batch_btn.clicked.connect(self._send_manual_batch)
         self.manual_send_batch_btn.setEnabled(False)
         batch_row.addWidget(self.manual_send_batch_btn)
@@ -1496,7 +1536,7 @@ class SettingsWindow(QMainWindow):
 
         layout.addStretch(1)
 
-        self._add_sidebar_page(ScrollablePage(page), "Manual Emailer", "✉️")
+        return page                                                                                                                   # Return page so it can be placed inside the Reminders horizontal tab
 
     def _refresh_manual_location_combo(self):
         """Refresh the location dropdown with current location keys."""
@@ -2877,6 +2917,12 @@ class SettingsWindow(QMainWindow):
                 border: 1px solid #3b3d42;
                 padding: 6px 10px;
             }
+            
+            QPushButton#ActionButton:disabled {
+                background-color: #6b7280;
+                color: #d1d5db;
+            }
+                           
             QPushButton {
                 color: white;
                 border: none;
@@ -3237,6 +3283,11 @@ class SettingsWindow(QMainWindow):
                 max-height: 100px;
             }
 
+            QPushButton#ActionButton:disabled {
+                background-color: #6b7280;
+                color: #d1d5db;
+            }
+                           
             QPushButton {
                 background-color: #3498db;
                 color: white;
