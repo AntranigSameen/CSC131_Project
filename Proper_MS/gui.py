@@ -7,6 +7,7 @@ import sys
 import json
 import subprocess
 import logging
+import csv
 from pathlib import Path
 
 from dotenv import set_key, load_dotenv
@@ -14,7 +15,8 @@ from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation,
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor, QPainter, QPen, QFont, QPixmap
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
-                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, QCheckBox, QTabWidget,)
+                               QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, 
+                               QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,)
 
 from utils import writable_env_file, base_dir, log_file, resource_path
 from location_keys import (
@@ -1026,6 +1028,115 @@ class SettingsWindow(QMainWindow):
 
         return action_widget
 
+    #==================
+    # CSV VIEWER LOGIC
+    #==================
+
+    def _make_csv_viewer_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(10)                                                                                                         # Space between CSV picker controls and table
+
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(8)
+
+        self.csv_viewer_file_combo = QComboBox()
+        self.csv_viewer_file_combo.setPlaceholderText("Select a generated CSV...")                                                    # Let user choose one generated CSV file
+
+        refresh_btn = QPushButton("Refresh CSV List")
+        refresh_btn.setObjectName("ActionButton")                                                                                     # Match RQI action button styling
+        refresh_btn.clicked.connect(lambda: self._animate_button_press(refresh_btn))                                                  # Animate refresh click
+        refresh_btn.clicked.connect(self._refresh_csv_viewer_files)                                                                   # Reload available generated CSVs
+
+        load_btn = QPushButton("Load CSV")
+        load_btn.setObjectName("ActionButton")                                                                                        # Match RQI action button styling
+        load_btn.clicked.connect(lambda: self._animate_button_press(load_btn))                                                        # Animate load click
+        load_btn.clicked.connect(self._load_selected_csv)                                                                             # Load selected CSV into table
+
+        controls_row.addWidget(self.csv_viewer_file_combo, 1)
+        controls_row.addWidget(refresh_btn)
+        controls_row.addWidget(load_btn)
+
+        self.csv_viewer_table = QTableWidget()
+        self.csv_viewer_table.setObjectName("CsvViewerTable")                                                                         # Stylesheet hook for Excel-like CSV table
+        self.csv_viewer_table.setSortingEnabled(True)                                                                                 # Allow sorting by clicking column headers
+        self.csv_viewer_table.setAlternatingRowColors(True)                                                                           # Easier row scanning like spreadsheet software
+        self.csv_viewer_table.horizontalHeader().setStretchLastSection(True)                                                          # Let last column fill available width
+        self.csv_viewer_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)                                        # Allow user to resize columns manually
+        self.csv_viewer_table.verticalHeader().setVisible(False)                                                                      # Cleaner spreadsheet-style view
+
+        layout.addLayout(controls_row)
+        layout.addWidget(self.csv_viewer_table, 1)
+
+        self._refresh_csv_viewer_files()                                                                                              # Populate dropdown when tab is created
+
+        return page
+
+    def _refresh_csv_viewer_files(self):
+        self.csv_viewer_file_combo.clear()                                                                                            # Clear old file list before rebuilding it
+
+        export_dir = os.getenv("RQI_CSV_EXPORT_DIR", "").strip()                                                                      # Root folder where generated RQI CSV files are stored
+
+        if not export_dir or not os.path.isdir(export_dir):
+            self.csv_viewer_file_combo.addItem("No CSV export folder found", "")                                                      # Show friendly empty state
+            return
+
+        csv_paths = sorted(
+            Path(export_dir).rglob("*.csv"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )                                                                                                                             # Newest generated CSV files first
+
+        if not csv_paths:
+            self.csv_viewer_file_combo.addItem("No generated CSV files found", "")                                                    # Show friendly empty state
+            return
+
+        for path in csv_paths:
+            label = f"{path.parent.name} / {path.name}"                                                                               # Friendly label showing batch folder and file name
+            self.csv_viewer_file_combo.addItem(label, str(path))                                                                      # Store full path as hidden combo data
+
+    def _load_selected_csv(self):
+        csv_path = self.csv_viewer_file_combo.currentData()                                                                           # Full CSV path stored in combo item data
+
+        if not csv_path:
+            QMessageBox.warning(self, "No CSV Selected", "Please select a generated CSV file first.")
+            return
+
+        if not os.path.exists(csv_path):
+            QMessageBox.warning(self, "CSV Not Found", "The selected CSV file no longer exists.")
+            self._refresh_csv_viewer_files()
+            return
+
+        try:
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as file:
+                reader = csv.reader(file)
+                rows = list(reader)                                                                                                   # Read whole CSV into memory for table display
+
+            if not rows:
+                QMessageBox.information(self, "Empty CSV", "The selected CSV file is empty.")
+                return
+
+            headers = rows[0]
+            data_rows = rows[1:]
+
+            self.csv_viewer_table.setSortingEnabled(False)                                                                            # Disable sorting while filling table
+            self.csv_viewer_table.clear()
+            self.csv_viewer_table.setColumnCount(len(headers))
+            self.csv_viewer_table.setRowCount(len(data_rows))
+            self.csv_viewer_table.setHorizontalHeaderLabels(headers)
+
+            for row_index, row_values in enumerate(data_rows):
+                for col_index, value in enumerate(row_values):
+                    item = QTableWidgetItem(value)
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)                                                                  # Make cells read-only like a viewer
+                    self.csv_viewer_table.setItem(row_index, col_index, item)
+
+            self.csv_viewer_table.resizeColumnsToContents()                                                                           # Auto-size columns after loading
+            self.csv_viewer_table.setSortingEnabled(True)                                                                             # Re-enable header sorting after load
+
+        except Exception as e:
+            QMessageBox.critical(self, "CSV Load Failed", f"Could not load CSV:\n{e}")
+
     def _build_csv_sftp_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1096,6 +1207,11 @@ class SettingsWindow(QMainWindow):
         status_layout.addSpacing(14)                                                                                                  # Extra space at the bottom of the status tab for visual balance
 
         export_tabs.addTab(status_page, "Status")                                                                                     # First horizontal tab shows live status
+
+        # =================
+        # CSV VIEWER BUILD
+        # =================
+        export_tabs.addTab(self._make_csv_viewer_tab(), "CSV Viewer")                                                                 # Second horizontal tab shows interactive CSV viewer for generated files with sorting and auto-sizing
 
         # =================
         # CSV SETTINGS TAB
