@@ -632,7 +632,7 @@ class SettingsWindow(QMainWindow):
 
         else:
             self.sidebar_frame.setFixedWidth(225)                                                                                     # Expanded sidebar width for icon plus tab names
-            self.collapse_button.setText("«")                                                                                         # Show collapse arrow while expanded
+            self.collapse_button.setText("Collapse")                                                                                  # Show collapse while expanded
             self.collapse_button.setToolTip("Collapse Sidebar")
             self.collapse_button.setFixedSize(188, 28)
 
@@ -935,9 +935,7 @@ class SettingsWindow(QMainWindow):
         self._build_csv_sftp_tab()                                                                                                    # RQI CSV & SFTP page
         self._build_credentials_tab()                                                                                                 # Credential management page
         self._build_reminders_tab()                                                                                                   # Combined Reminder Emails and Manual Emailer page
-        self._build_location_keys_tab()                                                                                               # Location key mapping page
-        self._build_location_templates_tab()                                                                                          # Location email template editor page
-        self._build_location_tracker_tab()                                                                                            # Location email tracker audit page
+        self._build_locations_tab()                                                                                                   # Combined Locations page with keys, templates, and tracker subtabs
         self._build_logs_tab()                                                                                                        # Live logs page
 
         if self.sidebar_buttons:
@@ -1744,11 +1742,58 @@ class SettingsWindow(QMainWindow):
             QMessageBox.critical(self, "Batch Failed", f"Batch send failed:\n{e}")
             self._log_to_manual_send(f"✗ Batch error: {e}")
 
-    # =========
-    # LOCATION KEYS TAB
-    # =========
+    # =============
+    # LOCATIONS TAB
+    # =============
 
-    def _build_location_keys_tab(self):
+    def _build_locations_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)                                                                                                         # Comfortable spacing between heading and location subtabs
+
+        title = QLabel("Locations")
+        title.setObjectName("SectionTitle")                                                                                           # Main heading for all location-related tools
+
+        subtitle = QLabel("Manage location keys, location email templates, and sent-email tracking.")
+        subtitle.setObjectName("SectionSubtitle")                                                                                     # Short explanation for the combined Locations page
+        subtitle.setWordWrap(True)
+
+        location_tabs = QTabWidget()
+        location_tabs.setObjectName("SettingsInnerTabs")                                                                              # Horizontal tabs inside the Locations sidebar page
+        location_tabs.setMinimumHeight(0)                                                                                              # Prevent location subtabs from forcing the app layout taller
+        location_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)                                                       # Let inner pages scroll instead of stretching the whole GUI
+
+        keys_page = self._make_location_keys_page()                                                                                   # Location key mapping editor
+        templates_page = self._make_location_templates_page()                                                                         # Location email template editor
+        tracker_page = self._make_location_tracker_page()                                                                             # Location email tracker audit page
+
+        keys_scroll = ScrollablePage(keys_page)                                                                                       # Location Keys tab gets its own scrolling
+        keys_scroll.setMinimumHeight(0)
+        keys_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+
+        templates_scroll = ScrollablePage(templates_page)                                                                             # Location Templates tab gets its own scrolling
+        templates_scroll.setMinimumHeight(0)
+        templates_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+
+        tracker_scroll = ScrollablePage(tracker_page)                                                                                 # Location Tracker tab gets its own scrolling
+        tracker_scroll.setMinimumHeight(0)
+        tracker_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+
+        location_tabs.addTab(keys_scroll, "Location Keys")                                                                            # First horizontal tab for location key mappings
+        location_tabs.addTab(templates_scroll, "Location Templates")                                                                  # Second horizontal tab for template JSON/editor
+        location_tabs.addTab(tracker_scroll, "Location Tracker")                                                                      # Third horizontal tab for sent-email tracking
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(location_tabs, 1)
+
+        self._add_sidebar_page(page, "Locations", "📌")                                                                               # One sidebar button for all location tools
+
+    # ===================
+    # LOCATION KEYS PAGE
+    # ===================
+
+    def _make_location_keys_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setSpacing(12)
@@ -1814,7 +1859,8 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(self.location_store_path_label)
 
         self._refresh_location_keys_list()
-        self._add_sidebar_page(ScrollablePage(page), "Location Keys", "🗺️")
+        
+        return page
 
     def _refresh_location_keys_list(self):
         pairs = load_location_keys()
@@ -1996,11 +2042,11 @@ class SettingsWindow(QMainWindow):
         self.location_templates_editor.setPlainText(json.dumps(parsed, indent=2) + "\n")
         self._refresh_location_template_key_list()
 
-    # =========
-    # LOCATION TEMPLATES TAB
-    # =========
+    # ========================
+    # LOCATION TEMPLATES PAGE
+    # ========================
 
-    def _build_location_templates_tab(self):
+    def _make_location_templates_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setSpacing(12)
@@ -2099,13 +2145,14 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(self.location_templates_editor, 1)
 
         layout.addStretch(1)
-        self._add_sidebar_page(ScrollablePage(page), "Location Templates", "📝")
+        
+        return page                                                                                                                   # Return page so it can be placed inside the Locations horizontal tab
 
-    # =========
-    # LOCATION TRACKER TAB
-    # =========
+    # ======================
+    # LOCATION TRACKER PAGE
+    # ======================
 
-    def _build_location_tracker_tab(self):
+    def _make_location_tracker_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setSpacing(12)
@@ -2151,7 +2198,8 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(self.location_tracker_path_label)
 
         self._refresh_location_tracker_list()
-        self._add_sidebar_page(ScrollablePage(page), "Location Tracker", "📬")
+        
+        return page                                                                                                                   # Return page so it can be placed inside the Locations horizontal tab
 
     def _refresh_location_tracker_list(self):
         entries = load_tracker_entries()
@@ -3255,7 +3303,7 @@ class SettingsWindow(QMainWindow):
                 padding: 7px;
                 selection-background-color: #3498db;
             }
-
+                           
             QLineEdit:hover,
             QPlainTextEdit:hover,
             QTextEdit:hover,
