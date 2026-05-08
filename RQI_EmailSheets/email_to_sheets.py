@@ -37,6 +37,7 @@ from Proper_MS.outlook_authentication import authenticate
 from Proper_MS.utils import resource_path, writable_env_file
 from Proper_MS.acuity_registration import update_aha_registration_status
 from Proper_MS.dashboard_events import dashboard_event
+from Proper_MS.dashboard_metrics import increment_paid_today
 
 # --------------------------------------------------------------------
 # Environment Variables
@@ -1567,7 +1568,8 @@ def main():
         try:
             ws.append_row(row, value_input_option="RAW")
             logging.info("Appended row to sheet for message subject: %s", subject)
-            dashboard_event(f"[RQI] added email '{subject}' to Google Sheets")                                                          # Mini dashboard event for successful RQI sheet write
+            dashboard_event(f"[RQI] added email '{subject}' to Google Sheets")                                                        # Mini dashboard event for successful RQI sheet write
+            increment_paid_today()                                                                                                   # Increment Enrolled Today after successful RQI Google Sheet append
 
             append_row_to_current_csv(row, sheet_headers)                                                                             # Append the same processed lead row into the active CSV batch for SFTP upload
             logging.info("Appended row to current CSV batch for message subject: %s", subject)

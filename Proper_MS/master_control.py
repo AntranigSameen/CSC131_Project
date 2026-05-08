@@ -16,6 +16,8 @@ from utils import resource_path, log_file, base_dir, load_settings, env_file, en
 
 from dashboard_events import dashboard_event                                                                                         # Human-readable mini live log event helper
 from split_logging import setup_split_logging                                                                                        # Set up separate log files for different services    
+from dashboard_metrics import increment_registered_today                                                                             # Increment today's registration count for dashboard metrics
+
 
 """PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -329,6 +331,7 @@ def automation_worker():
         try:
             settings = load_settings()                                                                                               # Reload current settings before each task
             run_demo(name=name, date=date, headless=settings["IS_HEADLESS"])                                                         # Run browser automation for queued task
+            increment_registered_today()                                                                                             # Increment Registered Today only after successful AHA automation
         except Exception as e:
             logging.exception("Error in automation_worker for %s, %s: %s", name, date, e)
         finally:

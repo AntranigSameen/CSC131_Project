@@ -38,6 +38,8 @@ from location_email_templates import (
     remove_location_template_entry,
 )
 
+from dashboard_metrics import load_dashboard_metrics, get_registered_total, get_paid_total
+
 # ============================
 # LOAD ENVIRONMENT VARIABLES
 # ============================
@@ -821,6 +823,10 @@ class SettingsWindow(QMainWindow):
         self.get_pause_states = get_pause_states                                                                                      # Callback returning all current pause states
         self.on_quit = on_quit                                                                                                        # Callback for quit button
         self.entries = {}                                                                                                             # Stores all editable env QLineEdit widgets
+        self.registered_card_mode = "today"                                                                                           # Tracks Registered card mode: today or total
+        self.paid_card_mode = "today"                                                                                                 # Tracks Enrolled card mode: today or total
+        self.cached_registered_total = None                                                                                           # Cached AHA sheet row count so card clicks do not freeze GUI
+        self.cached_paid_total = None                                                                                                 # Cached RQI sheet row count so card clicks do not freeze GUI
 
         self.selected_pause_target = "all"                                                                                            # Tracks which pause action the main split button should execute
 
@@ -831,6 +837,7 @@ class SettingsWindow(QMainWindow):
         self._log_position = 0                                                                                                        # Current file read position for incremental log loading
         self._log_initialized = False                                                                                                 # Tracks whether log viewer has been fully loaded once
 
+        load_dashboard_metrics()                                                                                                      # Create/reset daily dashboard metrics file on app startup
         self._build_ui()                                                                                                              # Create all GUI widgets and layouts
         self._start_timers()                                                                                                          # Start automatic status/login/log refresh timers
     
@@ -1068,12 +1075,20 @@ class SettingsWindow(QMainWindow):
         # Card Creation
         # ==============
 
-        self.automation_card = StatusCard("Automation", "Checking status...")                                                         # Shows running/paused state
-        self.browser_card = StatusCard("Browser", "")                                                                                 # Shows headless vs visible browser
-        self.interval_card = StatusCard("Interval", "")                                                                               # Shows current cycle interval
-        self.queue_card = StatusCard("Queue", "")                                                                                     # Shows automation queue size
+        self.registered_today_card = StatusCard("Registered Today", "0")                                                              # Shows AHA registrations added today
+        self.paid_today_card = StatusCard("Enrolled Today", "0")                                                                      # Shows RQI paid emails processed today
+        self.errors_card = StatusCard("Errors", "0")                                                                                  # Shows current error count
+        self.queue_card = StatusCard("Queue", "")                                                                                     # Existing automation queue size card
 
-        for card in [self.automation_card, self.browser_card, self.interval_card, self.queue_card]:
+        self.registered_today_card.setCursor(Qt.PointingHandCursor)                                                                   # Make Registered card feel clickable
+        self.paid_today_card.setCursor(Qt.PointingHandCursor)                                                                         # Make Enrolled card feel clickable
+        self.errors_card.setCursor(Qt.PointingHandCursor)                                                                             # Make Errors card feel clickable
+
+        self.registered_today_card.mousePressEvent = lambda event: self._toggle_registered_card_mode()                                # Toggle Registered Today/Total on click
+        self.paid_today_card.mousePressEvent = lambda event: self._toggle_paid_card_mode()                                            # Toggle Enrolled Today/Total on click
+        self.errors_card.mousePressEvent = lambda event: self._open_logs_from_errors_card()                                           # Open Logs page when Errors card is clicked
+
+        for card in [self.registered_today_card, self.paid_today_card, self.errors_card, self.queue_card]:
             card.setMinimumWidth(160)                                                                                                 # Keep dashboard cards compact
             card.setMaximumWidth(200)                                                                                                 # Prevent cards from stretching too wide
             card.setFixedHeight(78)                                                                                                   # Force all four cards to the same height so the 2x2 grid is predictable
@@ -1087,10 +1102,10 @@ class SettingsWindow(QMainWindow):
         cards_grid.setHorizontalSpacing(10)                                                                                           # Space between left/right cards
         cards_grid.setVerticalSpacing(10)                                                                                             # Space between top/bottom cards
 
-        cards_grid.addWidget(self.automation_card, 0, 0)                                                                              # Top-left status card
-        cards_grid.addWidget(self.browser_card, 0, 1)                                                                                 # Top-right status card
-        cards_grid.addWidget(self.interval_card, 1, 0)                                                                                # Bottom-left status card
-        cards_grid.addWidget(self.queue_card, 1, 1)                                                                                   # Bottom-right status card
+        cards_grid.addWidget(self.registered_today_card, 0, 0)                                                                        # Top-left dashboard metric card
+        cards_grid.addWidget(self.paid_today_card, 0, 1)                                                                              # Top-right dashboard metric card
+        cards_grid.addWidget(self.errors_card, 1, 0)                                                                                  # Bottom-left dashboard metric card
+        cards_grid.addWidget(self.queue_card, 1, 1)                                                                                   # Existing bottom-right queue card
 
         left_top_panel = QWidget()
         left_top_layout = QVBoxLayout(left_top_panel)
@@ -2254,6 +2269,22 @@ class SettingsWindow(QMainWindow):
             self.entries[key] = edit                                                                                                  # Store widget by env variable name
             email_form.addRow(label, edit)
 
+        self.dashboard_totals_status_label = QLabel("Dashboard totals refresh every 4 hours automatically.")                           # Shows last dashboard totals refresh status
+        self.dashboard_totals_status_label.setObjectName("SectionSubtitle")
+
+        refresh_dashboard_totals_btn = QPushButton("Refresh Dashboard Totals")
+        refresh_dashboard_totals_btn.setObjectName("ActionButton")                                                                    # Manual refresh button for Registered/Enrolled total cards
+        refresh_dashboard_totals_btn.clicked.connect(self._refresh_dashboard_totals_clicked)                                           # Refresh Google Sheet totals on demand
+
+        dashboard_totals_row = QWidget()
+        dashboard_totals_layout = QHBoxLayout(dashboard_totals_row)
+        dashboard_totals_layout.setContentsMargins(0, 0, 0, 0)
+        dashboard_totals_layout.setSpacing(8)
+        dashboard_totals_layout.addWidget(refresh_dashboard_totals_btn)
+        dashboard_totals_layout.addWidget(self.dashboard_totals_status_label, 1)
+
+        email_form.addRow("Dashboard Totals", dashboard_totals_row)
+
         settings_tabs.addTab(email_page, "Email")                                                                                     # Add Email settings as horizontal inner tab
 
         layout.addWidget(title)
@@ -3413,6 +3444,11 @@ class SettingsWindow(QMainWindow):
         self.rqi_status_timer.timeout.connect(self._update_rqi_csv_sftp_status)                                                       # Refresh current batch window countdown and last upload information
         self.rqi_status_timer.start(1000)                                                                                             # Every 1 second so countdown feels live and responsive
 
+        self.dashboard_totals_timer = QTimer(self)
+        self.dashboard_totals_timer.timeout.connect(self._auto_refresh_dashboard_totals)                                               # Refresh Google Sheet dashboard totals every 4 hours
+        self.dashboard_totals_timer.start(4 * 60 * 60 * 1000)                                                                         # 4 hours in milliseconds
+        QTimer.singleShot(3000, self._auto_refresh_dashboard_totals)                                                                  # Refresh totals shortly after startup without blocking initial UI build
+        
         self._update_status()                                                                                                         # Initial status refresh on startup
         self._update_login_status()                                                                                                   # Initial login refresh on startup
         self._update_logs()                                                                                                           # Initial log refresh on startup
@@ -3488,50 +3524,10 @@ class SettingsWindow(QMainWindow):
         else:
             raw_status = "UNKNOWN"                                                                                                    # Fall back if status file missing
 
-        if raw_status == "RUNNING":
-            self.automation_card.set_value("Running")
-            self.automation_card.set_color("#00bc8c")
-            self.quick_status.setText("Running")
-            self.quick_status.setStyleSheet("color: #00bc8c; font-weight: 700;")
+        self._refresh_dashboard_metric_cards()                                                                                        # Refresh Registered/Enrolled cards using current today/total mode
 
-        elif raw_status == "PAUSED_ALL":
-            self.automation_card.set_value("All Automation Paused")
-            self.automation_card.set_color("#e64e30")
-            self.quick_status.setText("All Automation Paused")
-            self.quick_status.setStyleSheet("color: #e64e30; font-weight: 700;")
-
-        elif raw_status == "PAUSED_AUTOMATION_LOOP":
-            self.automation_card.set_value("AHA Automation Paused")
-            self.automation_card.set_color("#e64e30")
-            self.quick_status.setText("AHA Automation Paused")
-            self.quick_status.setStyleSheet("color: #e64e30; font-weight: 700;")
-
-        elif raw_status == "PAUSED_EMAIL_TO_SHEETS":
-            self.automation_card.set_value("RQI Email Parsing Paused")
-            self.automation_card.set_color("#e64e30")
-            self.quick_status.setText("RQI Email Parsing Paused")
-            self.quick_status.setStyleSheet("color: #e64e30; font-weight: 700;")
-        else:
-            self.automation_card.set_value("Unknown")
-            self.automation_card.set_color("#e64e30")
-            self.quick_status.setText("Unknown")
-            self.quick_status.setStyleSheet("color: #e64e30; font-weight: 700;")
-
-        current_headless = os.getenv("IS_HEADLESS", "")                                                                               # Read current browser visibility setting
-        if str(current_headless).strip().lower() in ("1", "true", "yes"):
-            self.browser_card.set_value("Headless")
-            self.browser_card.set_color("#00bc8c")
-            self.quick_mode.setText("Headless")
-            self.quick_mode.setStyleSheet("color: #00bc8c;")
-        else:
-            self.browser_card.set_value("Visible Browser")
-            self.browser_card.set_color("#f39c12")
-            self.quick_mode.setText("Visible Browser")
-            self.quick_mode.setStyleSheet("color: #f39c12;")
-
-        interval_text = os.getenv("INTERVAL", "")                                                                                     # Show current automation interval from env
-        self.interval_card.set_value(f"{interval_text} sec")
-        self.interval_card.set_color("#00bc8c")
+        self.errors_card.set_value("0")                                                                                               # Error counting will be connected in the next stage
+        self.errors_card.set_color("#e64e30")                                                                                       # Red for errors
 
         queue_file = os.path.join(base_dir(), "queue_status.txt")                                                                     # Queue status file written by master_control
         if os.path.exists(queue_file):
@@ -3585,6 +3581,87 @@ class SettingsWindow(QMainWindow):
             self.aha_required_label.show()                                                                                            # Show red warning near Sign Out button when login is missing
         else:
             self.aha_required_label.hide()                                                                                            # Hide warning when AHA login is present
+
+    # =======================
+    # TOP STATUS BAR HELPERS
+    # =======================
+
+    def _toggle_registered_card_mode(self):
+        self.registered_card_mode = "total" if self.registered_card_mode == "today" else "today"                                      # Switch Registered card between today and total
+        self._refresh_dashboard_metric_cards()                                                                                        # Immediately refresh card text/value
+
+    def _toggle_paid_card_mode(self):
+        self.paid_card_mode = "total" if self.paid_card_mode == "today" else "today"                                                  # Switch Enrolled card between today and total
+        self._refresh_dashboard_metric_cards()                                                                                        # Immediately refresh card text/value
+
+    def _refresh_dashboard_metric_cards(self):
+        metrics = load_dashboard_metrics()                                                                                            # Load saved daily dashboard metrics
+
+        if self.registered_card_mode == "total":
+            self.registered_today_card.title_label.setText("Registered Total")                                                        # Show total mode title
+
+            if self.cached_registered_total is None:
+                self.registered_today_card.set_value("Click Refresh")                                                                 # Avoid slow Google Sheets lookup during card click
+            else:
+                self.registered_today_card.set_value(str(self.cached_registered_total))                                                # Show cached AHA sheet total
+        else:
+            self.registered_today_card.title_label.setText("Registered Today")                                                        # Show today mode title
+            self.registered_today_card.set_value(str(int(metrics.get("registered_today", 0))))                                        # Show today's saved count
+
+        if self.paid_card_mode == "total":
+            self.paid_today_card.title_label.setText("Enrolled Total")                                                                # Show total mode title
+
+            if self.cached_paid_total is None:
+                self.paid_today_card.set_value("Click Refresh")                                                                       # Avoid slow Google Sheets lookup during card click
+            else:
+                self.paid_today_card.set_value(str(self.cached_paid_total))                                                           # Show cached RQI sheet total
+        else:
+            self.paid_today_card.title_label.setText("Enrolled Today")                                                                # Show today mode title
+            self.paid_today_card.set_value(str(int(metrics.get("paid_today", 0))))                                                    # Show today's saved count
+
+        self.registered_today_card.set_color("#00bc8c")                                                                             # Keep Registered green
+        self.paid_today_card.set_color("#3498db")                                                                                   # Keep Enrolled blue
+
+    def _refresh_dashboard_totals_clicked(self):
+        self.dashboard_totals_status_label.setText("Refreshing dashboard totals...")                                                   # Show immediate feedback before slow Google Sheets calls
+        QApplication.processEvents()                                                                                                  # Let the label repaint before totals refresh starts
+
+        try:
+            self.cached_registered_total = get_registered_total()                                                                      # Refresh AHA total from Google Sheet
+            self.cached_paid_total = get_paid_total()                                                                                  # Refresh RQI total from Google Sheet
+            self._refresh_dashboard_metric_cards()                                                                                    # Update visible cards if they are in Total mode
+            self.dashboard_totals_status_label.setText("Dashboard totals refreshed successfully.")                                     # Show success status
+        except Exception as e:
+            self.dashboard_totals_status_label.setText(f"Dashboard totals refresh failed: {e}")                                        # Show readable failure status
+
+    def _auto_refresh_dashboard_totals(self):
+        try:
+            self.cached_registered_total = get_registered_total()                                                                      # Refresh AHA total from Google Sheet
+            self.cached_paid_total = get_paid_total()                                                                                  # Refresh RQI total from Google Sheet
+            self._refresh_dashboard_metric_cards()                                                                                    # Update cards if currently showing totals
+
+            if hasattr(self, "dashboard_totals_status_label"):
+                self.dashboard_totals_status_label.setText("Dashboard totals auto-refreshed.")                                         # Friendly status for Email tab
+        except Exception as e:
+            if hasattr(self, "dashboard_totals_status_label"):
+                self.dashboard_totals_status_label.setText(f"Dashboard totals auto-refresh failed: {e}")                              # Do not crash GUI if Sheets lookup fails
+
+    def _open_logs_from_errors_card(self):
+        for item in self.sidebar_buttons:
+            expanded_button = item.get("expanded")                                                                                    # Expanded sidebar button for this page
+            label_text = getattr(expanded_button, "sidebar_label_text", "") if expanded_button else ""
+
+            if label_text == "System Logs":
+                self._set_sidebar_page(item["page_index"])                                                                            # Switch main content to System Logs page
+
+                if hasattr(self, "log_tabs"):
+                    for tab_index in range(self.log_tabs.count()):
+                        if self.log_tabs.tabText(tab_index) == "Errors":
+                            self.log_tabs.setCurrentIndex(tab_index)                                                                  # Open the Errors log subtab directly
+                            break
+
+                return
+            
 
     # ===================
     # LOG VIEWER HELPERS
