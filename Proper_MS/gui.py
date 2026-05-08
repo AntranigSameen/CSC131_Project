@@ -1401,6 +1401,24 @@ class SettingsWindow(QMainWindow):
 
         return action_widget
 
+    #=====================
+    # FILE PATH SHORTENER
+    #=====================
+
+    def _shorten_path(self, path_str):
+        if not path_str:
+            return "—"
+
+        try:
+            path = Path(path_str)
+
+            if path.parent.name:
+                return f"{path.parent.name} / {path.name}"                                                                            # Show only containing folder and filename
+            return path.name                                                                                                          # Fallback for root-level files
+
+        except Exception:
+            return path_str                                                                                                           # Fallback if invalid path
+
     #==================
     # CSV VIEWER LOGIC
     #==================
@@ -2016,7 +2034,6 @@ class SettingsWindow(QMainWindow):
         self.rqi_batch_countdown_label = QLabel("Loading...")                                                                         # Shows live countdown until current batch window ends
         self.rqi_current_csv_label = QLabel("Loading...")                                                                             # Shows currently active CSV batch file path
         self.rqi_last_uploaded_local_label = QLabel("None yet")                                                                       # Shows most recent local CSV file uploaded successfully
-        self.rqi_last_uploaded_remote_label = QLabel("None yet")                                                                      # Shows most recent remote SFTP destination used successfully
         self.rqi_last_upload_time_label = QLabel("None yet")                                                                          # Shows timestamp of most recent successful upload
         self.rqi_last_upload_error_label = QLabel("None")                                                                             # Shows most recent upload error
 
@@ -2025,7 +2042,6 @@ class SettingsWindow(QMainWindow):
             self._make_export_status_card("Time Remaining", self.rqi_batch_countdown_label),
             self._make_export_status_card("Current CSV File", self.rqi_current_csv_label),
             self._make_export_status_card("Last Uploaded Local File", self.rqi_last_uploaded_local_label),
-            self._make_export_status_card("Last Uploaded Remote Path", self.rqi_last_uploaded_remote_label),
             self._make_export_status_card("Last Upload Time", self.rqi_last_upload_time_label),
             self._make_export_status_card("Last Upload Error", self.rqi_last_upload_error_label),
         ]                                                                                                                             # Status cards make the live information easier to scan than a long form
@@ -3360,16 +3376,13 @@ class SettingsWindow(QMainWindow):
         self.rqi_batch_countdown_label.setText(f"{minutes_remaining:02d}:{seconds_remainder:02d}")                                    # Live countdown until automatic batch rollover
 
         current_csv_path = status.get("current_csv_path") or status.get("latest_csv_path") or ""
-        self.rqi_current_csv_label.setText(current_csv_path if current_csv_path else "No CSV created yet")
+        self.rqi_current_csv_label.setText(self._shorten_path(current_csv_path) if current_csv_path else "No CSV created yet")        # Show only folder and file name for current CSV
 
         last_uploaded_local = status.get("last_uploaded_local_path", "")
-        self.rqi_last_uploaded_local_label.setText(last_uploaded_local if last_uploaded_local else "None yet")
-
-        last_uploaded_remote = status.get("last_uploaded_remote_path", "")
-        self.rqi_last_uploaded_remote_label.setText(last_uploaded_remote if last_uploaded_remote else "None yet")
+        self.rqi_last_uploaded_local_label.setText(self._shorten_path(last_uploaded_local) if last_uploaded_local else "None yet")    # Show only folder and file name for last uploaded local CSV
 
         last_upload_time = status.get("last_upload_time", "")
-        self.rqi_last_upload_time_label.setText(last_upload_time if last_upload_time else "None yet")
+        self.rqi_last_upload_time_label.setText(last_upload_time if last_upload_time else "None")
 
         last_upload_error = status.get("last_upload_error", "")
         self.rqi_last_upload_error_label.setText(last_upload_error if last_upload_error else "None")
@@ -3817,8 +3830,8 @@ class SettingsWindow(QMainWindow):
 
             QLabel#ExportStatusValue {
                 color: #f3f6fb;
-                font-size: 14px;
-                font-weight: 700;
+                font-size: 11px;
+                font-weight: 500;
                 background-color: transparent;
             }
             QLabel#StatusCardTitle {
@@ -4288,8 +4301,8 @@ class SettingsWindow(QMainWindow):
             QLabel#StatusCardValue,
             QLabel#ExportStatusValue {
                 color: #111827;
-                font-size: 14px;
-                font-weight: 700;
+                font-size: 11px;
+                font-weight: 500;
                 background-color: transparent;
             }
 
