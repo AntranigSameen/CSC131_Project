@@ -20,6 +20,7 @@ pip install playwright
 pip install pystray pillow
 pip install ttkbootstrap
 pip install paramiko
+pip install openpyxl
 python -m playwright install
 
 Write-Host "Setup complete ✅"

@@ -8,11 +8,12 @@ import json
 import subprocess
 import logging
 import csv
+from openpyxl import Workbook
 from pathlib import Path
 
 from dotenv import set_key, load_dotenv
-from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation, QEasingCurve, QRegularExpression
-from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor, QPainter, QPen, QFont, QPixmap
+from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation, QEasingCurve, QRegularExpression, QPoint
+from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor, QPainter, QPen, QFont, QPixmap, QShortcut, QKeySequence
 from PySide6.QtWidgets import (QApplication, QListWidgetItem, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
                                QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, 
@@ -423,6 +424,378 @@ class AppTrayIcon(QSystemTrayIcon):
         if reason == QSystemTrayIcon.Trigger:
             self.show_settings()                                                                                                      # Left-click tray icon opens settings window
 
+
+# =====================
+# ADVANCED CSV VIEWER
+# =====================
+
+class AdvancedCsvViewer(QDialog):
+    def __init__(self, parent=None, headers=None, rows=None, visible_columns=None):
+        super().__init__(parent)
+
+        self.setWindowTitle("Advanced CSV Viewer")
+        self.resize(1100, 700)                                                                                                        # Large spreadsheet-style CSV viewer window
+
+        self.headers = headers or []                                                                                                  # CSV header row passed from main CSV viewer
+        self.rows = rows or []                                                                                                        # CSV data rows passed from main CSV viewer
+        self.visible_columns = visible_columns                                                                                        # Columns currently visible in normal CSV Viewer
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)                                                                                                         # Space between search controls and table
+
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(8)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search all visible CSV data...")                                                        # Global row search across all columns
+
+        self.search_column_combo = QComboBox()
+        self.search_column_combo.addItem("All Columns", -1)                                                                           # Default search checks every column
+
+        for index, header in enumerate(self.headers):
+            self.search_column_combo.addItem(header, index)                                                                           # Allow searching one specific column
+
+        clear_btn = QPushButton("Clear Search")
+        clear_btn.setObjectName("ActionButton")                                                                                       # Match app action button styling
+        clear_btn.clicked.connect(self._clear_search)                                                                                 # Reset search and show all rows
+
+        export_btn = QPushButton("Export Current View")
+        export_btn.setObjectName("ActionButton")                                                                                      # Export currently visible Advanced Viewer rows
+        export_btn.clicked.connect(self._export_current_view)                                                                         # Save filtered visible rows to a new CSV file
+
+        controls_row.addWidget(self.search_column_combo)
+        controls_row.addWidget(self.search_input, 1)
+        controls_row.addWidget(clear_btn)
+        controls_row.addWidget(export_btn)
+
+        column_label = QLabel("Visible Columns")
+        column_label.setObjectName("SectionSubtitle")                                                                                 # Label above Advanced Viewer column visibility controls
+
+        self.column_checkbox_container = QWidget()
+        self.column_checkbox_layout = QGridLayout(self.column_checkbox_container)
+        self.column_checkbox_layout.setContentsMargins(0, 0, 0, 0)
+        self.column_checkbox_layout.setHorizontalSpacing(14)
+        self.column_checkbox_layout.setVerticalSpacing(6)
+
+        self.column_checkboxes = []                                                                                                   # Stores Advanced Viewer column visibility checkboxes
+
+        self.table = QTableWidget()
+        self.table.setObjectName("CsvViewerTable")                                                                                    # Reuse existing CSV table styling
+        self.table.setSortingEnabled(True)                                                                                            # Allow sorting by clicking headers
+        self.table.setAlternatingRowColors(True)                                                                                      # Spreadsheet-style row readability
+        self.table.horizontalHeader().setStretchLastSection(True)                                                                     # Keep last column filling extra room
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)                                                   # Allow manual resizing
+        self.table.verticalHeader().setVisible(False)                                                                                 # Cleaner spreadsheet look
+
+        self.table.setSelectionBehavior(QTableWidget.SelectItems)                                                                     # Spreadsheet-style cell selection behavior
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)                                                                   # Allow selecting multiple rows/cells
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)                                                                         # Enable custom right-click menu on table
+        self.table.customContextMenuRequested.connect(self._show_context_menu)                                                        # Open spreadsheet-style copy menu
+
+        self.stats_label = QLabel("Rows: 0 | Visible: 0 | Columns: 0")
+        self.stats_label.setObjectName("SectionSubtitle")                                                                             # Small status label under table
+
+        layout.addLayout(controls_row)
+        layout.addWidget(column_label)
+        layout.addWidget(self.column_checkbox_container)
+        layout.addWidget(self.table, 1)
+        layout.addWidget(self.stats_label)
+
+        self.search_input.textChanged.connect(self._apply_search)                                                                     # Live filter as user types
+        self.table.itemSelectionChanged.connect(self._update_stats)                                                                   # Update selection statistics live
+        self.search_column_combo.currentIndexChanged.connect(self._apply_search)                                                      # Re-filter when changing search column
+
+        copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self.table)                                                                 # Spreadsheet-style copy shortcut
+        copy_shortcut.activated.connect(self._copy_selected_cells)                                                                    # Copy selected table cells to clipboard
+
+        self._load_table()                                                                                                            # Fill table when dialog opens
+
+    def _load_table(self):
+        self.table.setSortingEnabled(False)                                                                                           # Prevent sorting while table is being populated
+        self.table.clear()
+        self.table.setColumnCount(len(self.headers))
+        self.table.setRowCount(len(self.rows))
+        self.table.setHorizontalHeaderLabels(self.headers)
+
+        for row_index, row_values in enumerate(self.rows):
+            for col_index, value in enumerate(row_values):
+                item = QTableWidgetItem(str(value))
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)                                                                      # Advanced viewer is read-only for now
+                self.table.setItem(row_index, col_index, item)
+
+        self.table.resizeColumnsToContents()                                                                                          # Auto-fit after loading
+        if self.visible_columns is not None:
+            for col_index in range(self.table.columnCount()):
+                self.table.setColumnHidden(col_index, col_index not in self.visible_columns)                                          # Match normal CSV Viewer visible columns
+        self.table.setSortingEnabled(True)                                                                                            # Re-enable sorting after loading
+        self._build_column_checkboxes()                                                                                               # Build Advanced Viewer column visibility controls
+        self._update_stats()                                                                                                          # Show initial row/column counts
+
+    def _build_column_checkboxes(self):
+        while self.column_checkbox_layout.count():
+            item = self.column_checkbox_layout.takeAt(0)                                                                              # Remove old checkbox widgets before rebuilding
+            widget = item.widget()
+
+            if widget:
+                widget.deleteLater()
+
+        self.column_checkboxes = []                                                                                                   # Reset checkbox reference list
+
+        self.show_all_columns_checkbox = QCheckBox("Show All Columns")
+        self.show_all_columns_checkbox.setChecked(True)                                                                               # Default to all columns visible
+        self.show_all_columns_checkbox.stateChanged.connect(self._toggle_all_columns)                                                 # Toggle all column visibility at once
+
+        self.column_checkbox_layout.addWidget(self.show_all_columns_checkbox, 0, 0)
+
+        for col_index in range(self.table.columnCount()):
+            header_item = self.table.horizontalHeaderItem(col_index)
+            header_text = header_item.text() if header_item else f"Column {col_index + 1}"
+
+            checkbox = QCheckBox(header_text)
+            checkbox.setChecked(not self.table.isColumnHidden(col_index))                                                             # Match current table visibility state
+            checkbox.column_index = col_index
+            checkbox.stateChanged.connect(self._apply_column_visibility)
+
+            grid_index = col_index + 1                                                                                                # Offset because Show All Columns uses first slot
+            row = grid_index % 2
+            col = grid_index // 2
+
+            self.column_checkbox_layout.addWidget(checkbox, row, col)
+            self.column_checkboxes.append(checkbox)
+
+    def _toggle_all_columns(self):
+        show_all = self.show_all_columns_checkbox.isChecked()                                                                         # True means every column should be visible
+
+        for checkbox in self.column_checkboxes:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(show_all)
+            checkbox.blockSignals(False)
+
+        self._apply_column_visibility()                                                                                               # Apply visibility after bulk checkbox update
+
+    def _apply_column_visibility(self):
+        for checkbox in self.column_checkboxes:
+            self.table.setColumnHidden(
+                checkbox.column_index,
+                not checkbox.isChecked()
+            )                                                                                                                         # Hide unchecked Advanced Viewer columns
+
+        self._update_stats()                                                                                                          # Refresh visible column count after column visibility changes
+
+    def _show_context_menu(self, position):
+        menu = QMenu(self)
+
+        copy_cell_action = QAction("Copy Cell", self)
+        copy_cell_action.triggered.connect(self._copy_current_cell)                                                                   # Copy currently focused spreadsheet cell
+
+        copy_selected_action = QAction("Copy Selected Cells", self)
+        copy_selected_action.triggered.connect(self._copy_selected_cells)                                                             # Copy selected spreadsheet cells as tab-delimited data
+
+        copy_rows_action = QAction("Copy Selected Rows", self)
+        copy_rows_action.triggered.connect(self._copy_selected_rows)                                                                  # Copy entire selected spreadsheet rows
+
+        menu.addAction(copy_cell_action)
+        menu.addAction(copy_selected_action)
+        menu.addAction(copy_rows_action)
+
+        menu.exec(self.table.viewport().mapToGlobal(position))
+
+    def _copy_current_cell(self):
+        current_item = self.table.currentItem()
+
+        if not current_item:
+            return                                                                                                                    # No active spreadsheet cell selected
+
+        QApplication.clipboard().setText(current_item.text())                                                                         # Copy focused spreadsheet cell text
+
+    def _copy_selected_cells(self):
+        selected_ranges = self.table.selectedRanges()
+
+        if not selected_ranges:
+            return                                                                                                                    # No spreadsheet cells selected
+
+        selected_range = selected_ranges[0]
+
+        copied_lines = []
+
+        for row in range(selected_range.topRow(), selected_range.bottomRow() + 1):
+            row_values = []
+
+            for col in range(selected_range.leftColumn(), selected_range.rightColumn() + 1):
+                if self.table.isColumnHidden(col):
+                    continue                                                                                                          # Skip hidden columns during copy
+
+                item = self.table.item(row, col)
+                row_values.append(item.text() if item else "")
+
+            copied_lines.append("\t".join(row_values))
+
+        QApplication.clipboard().setText("\n".join(copied_lines))                                                                    # Copy spreadsheet-style tab-delimited block
+
+    def _copy_selected_rows(self):
+        selected_indexes = self.table.selectedIndexes()
+
+        if not selected_indexes:
+            return                                                                                                                    # No spreadsheet rows selected
+
+        selected_rows = sorted(set(index.row() for index in selected_indexes))
+
+        copied_lines = []
+
+        visible_columns = [
+            col for col in range(self.table.columnCount())
+            if not self.table.isColumnHidden(col)
+        ]                                                                                                                             # Copy only currently visible spreadsheet columns
+
+        headers = [
+            self.table.horizontalHeaderItem(col).text()
+            for col in visible_columns
+        ]
+
+        copied_lines.append("\t".join(headers))
+
+        for row in selected_rows:
+            row_values = []
+
+            for col in visible_columns:
+                item = self.table.item(row, col)
+                row_values.append(item.text() if item else "")
+
+            copied_lines.append("\t".join(row_values))
+
+        QApplication.clipboard().setText("\n".join(copied_lines))                                                                    # Copy full spreadsheet rows with headers
+
+    def _apply_search(self):
+        search_text = self.search_input.text().strip().lower()                                                                        # Case-insensitive search
+        selected_column = self.search_column_combo.currentData()                                                                      # -1 means all columns
+
+        for row in range(self.table.rowCount()):
+            should_show = True
+
+            if search_text:
+                should_show = False
+
+                if selected_column == -1:
+                    for col in range(self.table.columnCount()):
+                        item = self.table.item(row, col)
+                        cell_text = item.text().lower() if item else ""
+
+                        if search_text in cell_text:
+                            should_show = True                                                                                        # Match found in any column
+                            break
+                else:
+                    item = self.table.item(row, selected_column)
+                    cell_text = item.text().lower() if item else ""
+                    should_show = search_text in cell_text                                                                            # Match found in selected column only
+
+            self.table.setRowHidden(row, not should_show)                                                                             # Hide rows that do not match search
+
+        self._update_stats()                                                                                                          # Refresh visible row count after filtering
+
+    def _clear_search(self):
+        self.search_input.clear()                                                                                                     # Clear search text
+        self.search_column_combo.setCurrentIndex(0)                                                                                   # Reset to All Columns
+        self._apply_search()                                                                                                          # Show all rows again
+
+    def _export_current_view(self):
+        if self.table.rowCount() == 0 or self.table.columnCount() == 0:
+            QMessageBox.information(self, "Nothing to Export", "There is no CSV data to export.")
+            return
+
+        export_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Current CSV View",
+            "advanced_csv_view",
+            "CSV Files (*.csv);;Excel Files (*.xlsx)"
+        )                                                                                                                             # Allow exporting filtered view as either CSV or Excel workbook
+
+        if not export_path:
+            return                                                                                                                    # User cancelled export dialog
+
+        try:
+            visible_columns = [
+                col for col in range(self.table.columnCount())
+                if not self.table.isColumnHidden(col)
+            ]                                                                                                                         # Export only columns currently visible in Advanced Viewer
+
+            headers = [
+                self.table.horizontalHeaderItem(col).text()
+                for col in visible_columns
+            ]                                                                                                                         # Visible column headers
+
+            visible_rows = []
+
+            for row in range(self.table.rowCount()):
+                if self.table.isRowHidden(row):
+                    continue                                                                                                          # Export only rows currently visible after filtering
+
+                row_values = []
+
+                for col in visible_columns:
+                    item = self.table.item(row, col)
+                    row_values.append(item.text() if item else "")
+
+                visible_rows.append(row_values)
+
+            if selected_filter.startswith("CSV"):
+                if not export_path.lower().endswith(".csv"):
+                    export_path += ".csv"                                                                                             # Ensure CSV extension exists
+
+                with open(export_path, "w", encoding="utf-8-sig", newline="") as file:
+                    writer = csv.writer(file)
+                    writer.writerow(headers)
+                    writer.writerows(visible_rows)
+
+            else:
+                if not export_path.lower().endswith(".xlsx"):
+                    export_path += ".xlsx"                                                                                            # Ensure Excel extension exists
+
+                workbook = Workbook()
+                sheet = workbook.active
+                sheet.title = "Advanced CSV View"
+
+                sheet.append(headers)                                                                                                 # Add header row first
+
+                for row_values in visible_rows:
+                    sheet.append(row_values)                                                                                          # Add visible filtered rows
+
+                workbook.save(export_path)
+
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Current CSV view exported successfully:\n{export_path}"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                f"Could not export current CSV view:\n{e}"
+            )
+
+    def _update_stats(self):
+        total_rows = self.table.rowCount()
+
+        visible_rows = sum(
+            1 for row in range(total_rows)
+            if not self.table.isRowHidden(row)
+        )                                                                                                                             # Count currently visible spreadsheet rows
+
+        visible_columns = sum(
+            1 for col in range(self.table.columnCount())
+            if not self.table.isColumnHidden(col)
+        )                                                                                                                             # Count currently visible spreadsheet columns
+
+        selected_indexes = self.table.selectedIndexes()
+        selected_cells = len(selected_indexes)                                                                                        # Total currently selected spreadsheet cells
+        selected_rows = len(set(index.row() for index in selected_indexes)) if selected_indexes else 0                                # Unique selected rows
+
+        self.stats_label.setText(
+            f"Visible Rows: {visible_rows} | Visible Columns: {visible_columns} | "
+            f"Selected Cells: {selected_cells} | Selected Rows: {selected_rows}"
+        )                                                                                                                             # Live spreadsheet-style table statistics
+
 # ============
 # MAIN WINDOW
 # ============
@@ -513,7 +886,7 @@ class SettingsWindow(QMainWindow):
             getattr(self, "pause_button", None),
             getattr(self, "restart_button", None),
             getattr(self, "quit_button", None),
-        ]                                                                                                                            # Main persistent application buttons
+        ]                                                                                                                             # Main persistent application buttons
 
         for button in buttons:
             if button is None:
@@ -548,7 +921,7 @@ class SettingsWindow(QMainWindow):
         font.setPointSize(14)
         painter.setFont(font)
 
-        painter.drawText(pixmap.rect(), Qt.AlignCenter, emoji)                                                                       # Draw emoji centered into icon pixmap
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, emoji)                                                                        # Draw emoji centered into icon pixmap
         painter.end()
 
         return QIcon(pixmap)
@@ -1053,8 +1426,9 @@ class SettingsWindow(QMainWindow):
         controls_row.addWidget(self.csv_file_menu_btn)
         controls_row.addWidget(self.csv_selected_files_label, 1)
 
-        column_filter_label = QLabel("Visible Columns")
-        column_filter_label.setObjectName("SectionSubtitle")                                                                          # Label above CSV column visibility checkboxes
+        clear_csv_view_btn = QPushButton("Clear CSV View")
+        clear_csv_view_btn.setObjectName("SmallLinkButton")                                                                           # Small text-sized button for resetting CSV Viewer
+        clear_csv_view_btn.clicked.connect(self._clear_csv_viewer)                                                                    # Reset CSV Viewer back to startup state
 
         self.csv_column_checkbox_container = QWidget()
         self.csv_column_checkbox_layout = QGridLayout(self.csv_column_checkbox_container)
@@ -1076,9 +1450,14 @@ class SettingsWindow(QMainWindow):
         load_all_btn.setObjectName("ActionButton")                                                                                    # Load every generated CSV into one combined table
         load_all_btn.clicked.connect(self._load_all_csvs)                                                                             # Combine all generated CSV files into one table
 
+        advanced_btn = QPushButton("Advanced Viewer")
+        advanced_btn.setObjectName("ActionButton")                                                                                    # Open larger advanced CSV viewer window
+        advanced_btn.clicked.connect(self._open_advanced_csv_viewer)                                                                  # Open advanced search/filter/export window
+
         controls_row.addWidget(refresh_btn)
         controls_row.addWidget(load_btn)
         controls_row.addWidget(load_all_btn)
+        controls_row.addWidget(advanced_btn)
 
         self.csv_viewer_table = QTableWidget()
         self.csv_viewer_table.setObjectName("CsvViewerTable")                                                                         # Stylesheet hook for Excel-like CSV table
@@ -1089,7 +1468,7 @@ class SettingsWindow(QMainWindow):
         self.csv_viewer_table.verticalHeader().setVisible(False)                                                                      # Cleaner spreadsheet-style view
 
         layout.addLayout(controls_row)
-        layout.addWidget(column_filter_label)
+        layout.addWidget(clear_csv_view_btn, 0, Qt.AlignLeft)                                                                         # Small reset button where Visible Columns label used to be
         layout.addWidget(self.csv_column_checkbox_container)
         layout.addWidget(self.csv_viewer_table, 1)
 
@@ -1106,6 +1485,22 @@ class SettingsWindow(QMainWindow):
             checkbox.blockSignals(False)
 
         self._apply_csv_column_visibility()                                                                                           # Apply visibility once after all checkboxes update
+
+    def _clear_csv_viewer(self):
+        self.csv_viewer_table.clear()                                                                                                 # Clear loaded CSV table contents
+        self.csv_viewer_table.setRowCount(0)                                                                                           # Reset table rows
+        self.csv_viewer_table.setColumnCount(0)                                                                                        # Reset table columns
+
+        while self.csv_column_checkbox_layout.count():
+            item = self.csv_column_checkbox_layout.takeAt(0)                                                                          # Remove old column checkbox widgets
+            widget = item.widget()
+
+            if widget:
+                widget.deleteLater()
+
+        self.csv_column_checkboxes = []                                                                                               # Reset column checkbox references
+        self.csv_current_headers = []                                                                                                 # Clear Advanced Viewer cached headers
+        self.csv_current_rows = []                                                                                                    # Clear Advanced Viewer cached rows
 
     def _refresh_csv_viewer_files(self):
         self.csv_available_paths = []                                                                                                 # Store all discovered generated CSV paths
@@ -1224,6 +1619,9 @@ class SettingsWindow(QMainWindow):
         self._load_csv_rows_into_viewer(combined_headers, combined_rows)                                                              # Display selected CSVs in one combined table
 
     def _load_csv_rows_into_viewer(self, headers, data_rows):
+        self.csv_current_headers = list(headers)                                                                                      # Store latest loaded headers for Advanced CSV Viewer
+        self.csv_current_rows = [list(row) for row in data_rows]                                                                      # Store latest loaded rows for Advanced CSV Viewer
+    
         self.csv_viewer_table.setSortingEnabled(False)                                                                                # Disable sorting while rebuilding table
         self.csv_viewer_table.clear()
         self.csv_viewer_table.setColumnCount(len(headers))
@@ -1250,6 +1648,22 @@ class SettingsWindow(QMainWindow):
             self.csv_selected_files_label.setText(f"Selected: {path.parent.name} / {path.name}")
         else:
             self.csv_selected_files_label.setText(f"{count} CSV files selected")
+
+    def _open_advanced_csv_viewer(self):
+        headers = getattr(self, "csv_current_headers", [])                                                                            # Latest loaded CSV headers
+        rows = getattr(self, "csv_current_rows", [])                                                                                  # Latest loaded CSV rows
+
+        if not headers or not rows:
+            QMessageBox.warning(self, "No CSV Loaded", "Please load one or more CSV files before opening the Advanced Viewer.")
+            return
+
+        visible_columns = [
+            col for col in range(self.csv_viewer_table.columnCount())
+            if not self.csv_viewer_table.isColumnHidden(col)
+        ]                                                                                                                             # Use current normal CSV Viewer visible columns
+
+        viewer = AdvancedCsvViewer(self, headers=headers, rows=rows, visible_columns=visible_columns)                                 # Create advanced CSV viewer with current visible columns
+        viewer.exec()                                                                                                                 # Open as modal window
 
     def _open_csv_file_selector(self):
         if not getattr(self, "csv_available_paths", []):
@@ -3597,18 +4011,34 @@ class SettingsWindow(QMainWindow):
                 border: none;
                 background: transparent;
             }
+            
+            QPushButton#SmallLinkButton {
+                background-color: transparent;
+                color: #aeb7c4;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+                font-size: 10px;
+                font-weight: 500;
+                text-align: left;
+            }
+
+            QPushButton#SmallLinkButton:hover {
+                color: #ffffff;
+                text-decoration: underline;
+            }
         """)
     
     def _apply_light_styles(self):
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #f5f7fb;
-                color: #111827;
+                background-color: #eef6ff;
+                color: #102033;
             }
 
             QWidget {
-                background-color: #f5f7fb;
-                color: #111827;
+                background-color: #eef6ff;
+                color: #102033;
                 font-family: Segoe UI;
                 font-size: 12px;
             }
@@ -3616,21 +4046,21 @@ class SettingsWindow(QMainWindow):
             QFrame#StatusCard,
             QStackedWidget#ContentStack,
             QFrame#ExportStatusCard {
-                background-color: #ffffff;
-                border: 1px solid #d5dce8;
+                background-color: #fbfdff;
+                border: 1px solid #c7dff5;
                 border-radius: 12px;
             }
             QFrame#MiniLogsPanel {
-                background-color: #ffffff;
-                border: 1px solid #d5dce8;
+                background-color: #fbfdff;
+                border: 1px solid #c7dff5;
                 border-radius: 12px;
                 min-height: 166px;
                 max-height: 166px;
             }
 
             QFrame#SidebarFrame {
-                background-color: #ffffff;
-                border: 1px solid #d5dce8;
+                background-color: #f8fbff;
+                border: 1px solid #c7dff5;
                 border-radius: 12px;
             }
                            
@@ -3697,9 +4127,9 @@ class SettingsWindow(QMainWindow):
             }
 
             QPlainTextEdit#MiniLogText {
-                background-color: #ffffff;
-                color: #111827;
-                border: 1px solid #c8d0dc;
+                background-color: #f8fbff;
+                color: #102033;
+                border: 1px solid #bfd7ee;
                 border-radius: 10px;
                 padding: 6px;
                 min-height: 84px;
@@ -3986,6 +4416,22 @@ class SettingsWindow(QMainWindow):
             QScrollBar::add-page:horizontal,
             QScrollBar::sub-page:horizontal {
                 background: none;
+            }
+            
+            QPushButton#SmallLinkButton {
+                background-color: transparent;
+                color: #334155;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+                font-size: 10px;
+                font-weight: 500;
+                text-align: left;
+            }
+
+            QPushButton#SmallLinkButton:hover {
+                color: #111827;
+                text-decoration: underline;
             }
         """)
 
