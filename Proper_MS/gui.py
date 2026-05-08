@@ -12,10 +12,10 @@ from openpyxl import Workbook
 from pathlib import Path
 
 from dotenv import set_key, load_dotenv
-from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation, QEasingCurve, QRegularExpression, QPoint
+from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation, QEasingCurve, QRegularExpression, QPoint, QDateTime, QTime
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor, QPainter, QPen, QFont, QPixmap, QShortcut, QKeySequence
-from PySide6.QtWidgets import (QApplication, QListWidgetItem, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
-                               QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QApplication, QCalendarWidget, QListWidgetItem, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
+                               QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox, QDateTimeEdit,
                                QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, 
                                QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,)
 
@@ -866,18 +866,18 @@ class SettingsWindow(QMainWindow):
 
     def _add_soft_shadow(self, widget, blur=18, y_offset=3):
         shadow = QGraphicsDropShadowEffect(self)                                                                                      # Soft visual depth effect for important panels/cards
-        shadow.setBlurRadius(blur)                                                                                                    # Higher blur makes the shadow softer
-        shadow.setOffset(0, y_offset)                                                                                                 # Slight downward shadow feels natural
-        shadow.setColor(QColor(15, 23, 42, 35))                                                                                       # Very subtle slate shadow for light mode
+        shadow.setBlurRadius(8)                                                                                                       # Reduce panel shadow spread in light mode
+        shadow.setOffset(0, 1)                                                                                                        # Smaller offset keeps panels visually compact
+        shadow.setColor(QColor(15, 23, 42, 20))                                                                                       # Lighter shadow avoids inflated spacing feel
         widget.setGraphicsEffect(shadow)                                                                                              # Apply shadow to target widget
 
     def _add_button_shadow(self, button):
         if button.objectName() == "ActionButton":
             return                                                                                                                    # Keep RQI action buttons visually identical between light and dark mode
         shadow = QGraphicsDropShadowEffect(self)                                                                                      # Soft depth effect for light-mode buttons
-        shadow.setBlurRadius(22)                                                                                                      # Softer than panel shadows
-        shadow.setOffset(0, 3)                                                                                                        # Small downward offset feels natural for buttons
-        shadow.setColor(QColor(15, 23, 42, 55))                                                                                       # Very subtle shadow so buttons do not look heavy
+        shadow.setBlurRadius(10)                                                                                                      # Smaller blur keeps light mode visually tighter
+        shadow.setOffset(0, 1)                                                                                                        # Smaller offset reduces fake button size increase
+        shadow.setColor(QColor(15, 23, 42, 28))                                                                                       # Softer shadow prevents oversized appearance
         button.setGraphicsEffect(shadow)                                                                                              # Apply shadow to button
 
     def _refresh_button_shadows(self):
@@ -1416,9 +1416,10 @@ class SettingsWindow(QMainWindow):
         self.csv_selected_paths = []                                                                                                  # Stores selected CSV file paths from compact checklist menu
         self.csv_available_paths = []                                                                                                 # Stores all generated CSV files found in the export folder
 
-        self.csv_file_menu_btn = QPushButton("Select CSV Files")
-        self.csv_file_menu_btn.setObjectName("ActionButton")                                                                          # Compact CSV selector button
+        self.csv_file_menu_btn = QPushButton("Select")
+        self.csv_file_menu_btn.setObjectName("SmallActionButton")                                                                     # Compact CSV selector button
         self.csv_file_menu_btn.clicked.connect(self._open_csv_file_selector)                                                          # Open checklist dialog for choosing CSV files
+        self.csv_file_menu_btn.setFixedWidth(50)                                                                                      # Compact width for Select button
 
         self.csv_selected_files_label = QLabel("No CSV files selected")
         self.csv_selected_files_label.setObjectName("SectionSubtitle")                                                                # Small summary of selected CSV files
@@ -1677,6 +1678,106 @@ class SettingsWindow(QMainWindow):
         dialog_layout = QVBoxLayout(dialog)
         dialog_layout.setSpacing(10)
 
+        range_row = QHBoxLayout()
+        range_row.setSpacing(8)
+
+        today_btn = QPushButton("Today")
+        today_btn.setObjectName("ActionButton")                                                                                       # Select CSV files modified today
+
+        last_week_btn = QPushButton("Last 7 Days")
+        last_week_btn.setObjectName("ActionButton")                                                                                   # Select CSV files modified in the last week
+
+        calendar_header_style = """
+            QCalendarWidget QWidget#qt_calendar_navigationbar {
+                background-color: transparent;
+                min-height: 34px;
+                max-height: 34px;
+            }
+
+            QCalendarWidget QAbstractItemView:item:hover {
+                background-color: #cfe8ff;
+                color: #102033;
+                border-radius: 4px;
+            }
+            
+            QCalendarWidget QToolButton#qt_calendar_monthbutton {
+                min-width: 90px;
+                padding-left: 8px;
+                padding-right: 8px;
+            }
+
+            QCalendarWidget QSpinBox#qt_calendar_yearedit {
+                min-width: 82px;
+                max-width: 82px;
+                padding: 1px 6px;
+                border: none;
+                background-color: transparent;
+                color: #102033;
+                font-weight: 600;
+            }
+
+            QCalendarWidget QSpinBox#qt_calendar_yearedit::up-button,
+            QCalendarWidget QSpinBox#qt_calendar_yearedit::down-button {
+                width: 0px;
+                height: 0px;
+                border: none;
+                background: transparent;
+            }
+
+            QCalendarWidget QSpinBox#qt_calendar_yearedit::up-arrow,
+            QCalendarWidget QSpinBox#qt_calendar_yearedit::down-arrow {
+                width: 0px;
+                height: 0px;
+                image: none;
+            }
+            
+            QCalendarWidget QToolButton#qt_calendar_yearbutton {
+                min-width: 82px;
+                max-width: 82px;
+                padding-left: 6px;
+                padding-right: 6px;
+            }
+
+            QCalendarWidget QToolButton#qt_calendar_prevmonth,
+            QCalendarWidget QToolButton#qt_calendar_nextmonth {
+                min-width: 28px;
+                max-width: 28px;
+                padding: 0px;
+            }
+        """                                                                                                                           # Prevent month/year text from colliding with calendar arrows
+
+        custom_start_edit = QDateTimeEdit()
+        custom_start_edit.setCalendarPopup(True)
+        custom_start_edit.calendarWidget().setFixedWidth(250)                                                                         # Give calendar popup enough width so month text does not collide with arrows
+        custom_start_edit.calendarWidget().setStyleSheet(calendar_header_style)                                                       # Give calendar header buttons enough internal room
+        custom_start_edit.setCalendarPopup(True)                                                                                      # Allow user to pick custom start date/time
+        custom_start_edit.setDisplayFormat("yyyy-MM-dd hh:mm AP")                                                                     # Friendly date/time format
+
+        custom_end_edit = QDateTimeEdit()
+        custom_end_edit.setCalendarPopup(True)
+        custom_end_edit.calendarWidget().setFixedWidth(250)                                                                           # Give calendar popup enough width so month text does not collide with arrows
+        custom_end_edit.calendarWidget().setStyleSheet(calendar_header_style)                                                         # Give calendar header buttons enough internal room
+        custom_end_edit.setCalendarPopup(True)                                                                                        # Allow user to pick custom end date/time
+        custom_end_edit.setDisplayFormat("yyyy-MM-dd hh:mm AP")                                                                       # Friendly date/time format
+
+        apply_range_btn = QPushButton("Apply Range")
+        apply_range_btn.setObjectName("ActionButton")                                                                                 # Select CSV files inside custom date/time range
+
+        range_row.addWidget(today_btn)
+        range_row.addWidget(last_week_btn)
+        range_row.addWidget(QLabel("From"))
+        range_row.addWidget(custom_start_edit)
+        range_row.addWidget(QLabel("To"))
+        range_row.addWidget(custom_end_edit)
+        range_row.addWidget(apply_range_btn)
+
+        now_dt = QDateTime.currentDateTime()                                                                                          # Current local date/time for range defaults
+        custom_start_edit.setDateTime(now_dt.addDays(-7))                                                                             # Default custom range starts one week ago
+        custom_end_edit.setDateTime(now_dt)                                                                                           # Default custom range ends now
+
+        selected_count_label = QLabel("0 CSV files selected")
+        selected_count_label.setObjectName("SectionSubtitle")                                                                         # Shows live number of checked CSV files in selector popup
+
         csv_list = QListWidget()
         csv_list.setObjectName("CsvFileSelectorList")                                                                                 # Checklist list shown only inside popup selector
 
@@ -1691,15 +1792,73 @@ class SettingsWindow(QMainWindow):
 
             csv_list.addItem(item)
 
+        def update_selected_count():
+            selected_count = 0
+
+            for row in range(csv_list.count()):
+                item = csv_list.item(row)
+
+                if item.checkState() == Qt.Checked:
+                    selected_count += 1
+
+            selected_count_label.setText(
+                f"{selected_count} CSV file selected" if selected_count == 1 else f"{selected_count} CSV files selected"
+            )                                                                                                                         # Update live selected CSV count
+
+        csv_list.itemChanged.connect(update_selected_count)                                                                           # Refresh count when user checks/unchecks files
+        update_selected_count()                                                                                                       # Show initial selected count
+
+        def set_checked_by_datetime(start_dt, end_dt):
+            start_seconds = start_dt.toSecsSinceEpoch()                                                                               # Start of selected date/time range
+            end_seconds = end_dt.toSecsSinceEpoch()                                                                                   # End of selected date/time range
+
+            for row in range(csv_list.count()):
+                item = csv_list.item(row)
+                path_str = item.data(Qt.UserRole)
+
+                if not path_str:
+                    continue
+
+                modified_seconds = Path(path_str).stat().st_mtime                                                                     # File modified time used for range selection
+                in_range = start_seconds <= modified_seconds <= end_seconds
+                item.setCheckState(Qt.Checked if in_range else Qt.Unchecked)                                                          # Check only CSV files inside range
+            
+            update_selected_count()                                                                                                   # Refresh count after range selection changes checked files
+
+        def select_today():
+            now = QDateTime.currentDateTime()
+            start = QDateTime(now.date(), now.time())
+            start.setTime(QTime(0, 0, 0))                                                                                              # Today at midnight
+            end = QDateTime(now.date(), now.time())
+            end.setTime(QTime(23, 59, 59))                                                                                             # Today at end of day
+            set_checked_by_datetime(start, end)
+
+        def select_last_week():
+            now = QDateTime.currentDateTime()
+            set_checked_by_datetime(now.addDays(-7), now)                                                                             # Last seven days through current moment
+
+        def apply_custom_range():
+            set_checked_by_datetime(custom_start_edit.dateTime(), custom_end_edit.dateTime())                                         # Custom selected date/time range
+
+        today_btn.clicked.connect(select_today)
+        last_week_btn.clicked.connect(select_last_week)
+        apply_range_btn.clicked.connect(apply_custom_range)
+
         button_row = QHBoxLayout()
 
         select_all_btn = QPushButton("Select All")
         select_all_btn.setObjectName("ActionButton")
-        select_all_btn.clicked.connect(lambda: [csv_list.item(i).setCheckState(Qt.Checked) for i in range(csv_list.count())])
+        select_all_btn.clicked.connect(lambda: (
+            [csv_list.item(i).setCheckState(Qt.Checked) for i in range(csv_list.count())],
+            update_selected_count()
+        ))                                                                                                                            # Select every CSV and refresh selected count
 
         clear_all_btn = QPushButton("Clear All")
         clear_all_btn.setObjectName("ActionButton")
-        clear_all_btn.clicked.connect(lambda: [csv_list.item(i).setCheckState(Qt.Unchecked) for i in range(csv_list.count())])
+        clear_all_btn.clicked.connect(lambda: (
+            [csv_list.item(i).setCheckState(Qt.Unchecked) for i in range(csv_list.count())],
+            update_selected_count()
+        ))                                                                                                                            # Clear every CSV and refresh selected count
 
         button_row.addWidget(select_all_btn)
         button_row.addWidget(clear_all_btn)
@@ -1709,6 +1868,8 @@ class SettingsWindow(QMainWindow):
         dialog_buttons.accepted.connect(dialog.accept)
         dialog_buttons.rejected.connect(dialog.reject)
 
+        dialog_layout.addLayout(range_row)
+        dialog_layout.addWidget(selected_count_label)
         dialog_layout.addWidget(csv_list)
         dialog_layout.addLayout(button_row)
         dialog_layout.addWidget(dialog_buttons)
@@ -3936,6 +4097,26 @@ class SettingsWindow(QMainWindow):
                 padding-bottom: 8px;
             }               
 
+            QPushButton#SmallActionButton {
+                background-color: #5865f2;
+                color: white;
+                min-width: 50px;
+                max-width: 90px;
+                min-height: 18px;
+                padding: 7px 14px;
+                border-radius: 10px;
+                font-weight: 600;
+                border: none;
+            }
+
+            QPushButton#SmallActionButton:hover {
+                background-color: #4752c4;
+            }
+
+            QPushButton#SmallActionButton:pressed {
+                background-color: #3c45aa;
+            }
+                           
             QFrame#MiniLogsPanel {
                 background-color: #2b2d31;
                 border: 1px solid #3b3d42;
@@ -4306,6 +4487,26 @@ class SettingsWindow(QMainWindow):
                 background-color: #3c45aa;
             }
 
+            QPushButton#SmallActionButton {
+                background-color: #5865f2;
+                color: white;
+                min-width: 50px;
+                max-width: 90px;
+                min-height: 18px;
+                padding: 7px 14px;
+                border-radius: 10px;
+                font-weight: 600;
+                border: none;
+            }
+
+            QPushButton#SmallActionButton:hover {
+                background-color: #4752c4;
+            }
+
+            QPushButton#SmallActionButton:pressed {
+                background-color: #3c45aa;
+            }
+
             QCheckBox::indicator {
                 width: 14px;
                 height: 14px;
@@ -4398,7 +4599,7 @@ class SettingsWindow(QMainWindow):
             QTabBar::tab {
                 background-color: #eef2f7;
                 color: #111827;
-                padding: 8px 16px;
+                padding: 6px 14px;
                 border-top-left-radius: 8px;
                 border-top-right-radius: 8px;
                 margin-right: 4px;
@@ -4501,7 +4702,7 @@ class SettingsWindow(QMainWindow):
             QScrollBar::sub-page:horizontal {
                 background: none;
             }
-            
+
             QPushButton#SmallLinkButton {
                 background-color: transparent;
                 color: #334155;
@@ -4517,7 +4718,7 @@ class SettingsWindow(QMainWindow):
                 color: #111827;
                 text-decoration: underline;
             }
-                           
+
             QMenu {
                 background-color: #f8fbff;
                 border: 1px solid #bdd7ee;
