@@ -11,9 +11,9 @@ import csv
 from pathlib import Path
 
 from dotenv import set_key, load_dotenv
-from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QSize, QRect, QRectF, QPropertyAnimation, QEasingCurve, QRegularExpression
 from PySide6.QtGui import QAction, QIcon, QGuiApplication, QTextCursor, QTextCharFormat, QColor, QPainter, QPen, QFont, QPixmap
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
+from PySide6.QtWidgets import (QApplication, QListWidgetItem, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget,
                                QScrollArea, QLineEdit, QMessageBox, QPlainTextEdit, QFormLayout, QSystemTrayIcon, QMenu, QDialog, QDialogButtonBox,
                                QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, 
                                QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,)
@@ -1040,22 +1040,45 @@ class SettingsWindow(QMainWindow):
         controls_row = QHBoxLayout()
         controls_row.setSpacing(8)
 
-        self.csv_viewer_file_combo = QComboBox()
-        self.csv_viewer_file_combo.setPlaceholderText("Select a generated CSV...")                                                    # Let user choose one generated CSV file
+        self.csv_selected_paths = []                                                                                                  # Stores selected CSV file paths from compact checklist menu
+        self.csv_available_paths = []                                                                                                 # Stores all generated CSV files found in the export folder
+
+        self.csv_file_menu_btn = QPushButton("Select CSV Files")
+        self.csv_file_menu_btn.setObjectName("ActionButton")                                                                          # Compact CSV selector button
+        self.csv_file_menu_btn.clicked.connect(self._open_csv_file_selector)                                                          # Open checklist dialog for choosing CSV files
+
+        self.csv_selected_files_label = QLabel("No CSV files selected")
+        self.csv_selected_files_label.setObjectName("SectionSubtitle")                                                                # Small summary of selected CSV files
+
+        controls_row.addWidget(self.csv_file_menu_btn)
+        controls_row.addWidget(self.csv_selected_files_label, 1)
+
+        column_filter_label = QLabel("Visible Columns")
+        column_filter_label.setObjectName("SectionSubtitle")                                                                          # Label above CSV column visibility checkboxes
+
+        self.csv_column_checkbox_container = QWidget()
+        self.csv_column_checkbox_layout = QGridLayout(self.csv_column_checkbox_container)
+        self.csv_column_checkbox_layout.setContentsMargins(0, 0, 0, 0)
+        self.csv_column_checkbox_layout.setHorizontalSpacing(14)
+        self.csv_column_checkbox_layout.setVerticalSpacing(6)
+
+        self.csv_column_checkboxes = []                                                                                               # Stores checkbox widgets for each loaded CSV column
 
         refresh_btn = QPushButton("Refresh CSV List")
         refresh_btn.setObjectName("ActionButton")                                                                                     # Match RQI action button styling
-        refresh_btn.clicked.connect(lambda: self._animate_button_press(refresh_btn))                                                  # Animate refresh click
         refresh_btn.clicked.connect(self._refresh_csv_viewer_files)                                                                   # Reload available generated CSVs
 
-        load_btn = QPushButton("Load CSV")
+        load_btn = QPushButton("Load Selected CSV")
         load_btn.setObjectName("ActionButton")                                                                                        # Match RQI action button styling
-        load_btn.clicked.connect(lambda: self._animate_button_press(load_btn))                                                        # Animate load click
         load_btn.clicked.connect(self._load_selected_csv)                                                                             # Load selected CSV into table
 
-        controls_row.addWidget(self.csv_viewer_file_combo, 1)
+        load_all_btn = QPushButton("Load All CSVs")
+        load_all_btn.setObjectName("ActionButton")                                                                                    # Load every generated CSV into one combined table
+        load_all_btn.clicked.connect(self._load_all_csvs)                                                                             # Combine all generated CSV files into one table
+
         controls_row.addWidget(refresh_btn)
         controls_row.addWidget(load_btn)
+        controls_row.addWidget(load_all_btn)
 
         self.csv_viewer_table = QTableWidget()
         self.csv_viewer_table.setObjectName("CsvViewerTable")                                                                         # Stylesheet hook for Excel-like CSV table
@@ -1066,19 +1089,87 @@ class SettingsWindow(QMainWindow):
         self.csv_viewer_table.verticalHeader().setVisible(False)                                                                      # Cleaner spreadsheet-style view
 
         layout.addLayout(controls_row)
+        layout.addWidget(column_filter_label)
+        layout.addWidget(self.csv_column_checkbox_container)
         layout.addWidget(self.csv_viewer_table, 1)
 
         self._refresh_csv_viewer_files()                                                                                              # Populate dropdown when tab is created
 
         return page
 
+    def _toggle_all_csv_columns(self):
+        show_all = self.csv_show_all_columns_checkbox.isChecked()                                                                      # True means every column should be visible
+
+        for checkbox in getattr(self, "csv_column_checkboxes", []):
+            checkbox.blockSignals(True)                                                                                               # Avoid applying visibility repeatedly during bulk update
+            checkbox.setChecked(show_all)
+            checkbox.blockSignals(False)
+
+        self._apply_csv_column_visibility()                                                                                           # Apply visibility once after all checkboxes update
+
     def _refresh_csv_viewer_files(self):
-        self.csv_viewer_file_combo.clear()                                                                                            # Clear old file list before rebuilding it
+        self.csv_available_paths = []                                                                                                 # Store all discovered generated CSV paths
+        self.csv_selected_paths = []                                                                                                  # Reset selected files when refreshing list
 
         export_dir = os.getenv("RQI_CSV_EXPORT_DIR", "").strip()                                                                      # Root folder where generated RQI CSV files are stored
 
         if not export_dir or not os.path.isdir(export_dir):
-            self.csv_viewer_file_combo.addItem("No CSV export folder found", "")                                                      # Show friendly empty state
+            self.csv_selected_files_label.setText("No CSV export folder found")
+            return
+
+        csv_paths = sorted(
+            Path(export_dir).rglob("*.csv"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )                                                                                                                             # Newest generated CSV files first
+
+        self.csv_available_paths = [str(path) for path in csv_paths]                                                                  # Save paths for checklist selector
+
+        if not self.csv_available_paths:
+            self.csv_selected_files_label.setText("No generated CSV files found")
+            return
+
+        self.csv_selected_paths = [self.csv_available_paths[0]]                                                                       # Select newest CSV by default
+        self._update_csv_selected_files_label()                                                                                       # Refresh selected-file summary text
+
+    def _load_selected_csv(self):
+        selected_paths = list(getattr(self, "csv_selected_paths", []))                                                                # CSV files chosen from compact selector popup
+
+        if not selected_paths:
+            QMessageBox.warning(self, "No CSV Selected", "Please check one or more generated CSV files first.")
+            return
+
+        if len(selected_paths) == 1:
+            csv_path = selected_paths[0]
+
+            if not os.path.exists(csv_path):
+                QMessageBox.warning(self, "CSV Not Found", "The selected CSV file no longer exists.")
+                self._refresh_csv_viewer_files()
+                return
+
+            try:
+                with open(csv_path, "r", encoding="utf-8-sig", newline="") as file:
+                    reader = csv.reader(file)
+                    rows = list(reader)
+
+                if not rows:
+                    QMessageBox.information(self, "Empty CSV", "The selected CSV file is empty.")
+                    return
+
+                self._load_csv_rows_into_viewer(rows[0], rows[1:])                                                                    # Display one selected CSV
+                return
+
+            except Exception as e:
+                QMessageBox.critical(self, "CSV Load Failed", f"Could not load CSV:\n{e}")
+                return
+
+        self._load_specific_csvs(selected_paths)                                                                                      # Display multiple selected CSVs together
+
+    def _load_all_csvs(self):
+        export_dir = os.getenv("RQI_CSV_EXPORT_DIR", "").strip()                                                                      # Root folder where generated RQI CSV files are stored
+
+        if not export_dir or not os.path.isdir(export_dir):
+            QMessageBox.warning(self, "No CSV Export Folder", "No valid RQI CSV export folder was found.")
             return
 
         csv_paths = sorted(
@@ -1088,54 +1179,222 @@ class SettingsWindow(QMainWindow):
         )                                                                                                                             # Newest generated CSV files first
 
         if not csv_paths:
-            self.csv_viewer_file_combo.addItem("No generated CSV files found", "")                                                    # Show friendly empty state
+            QMessageBox.information(self, "No CSV Files", "No generated CSV files were found.")
             return
 
-        for path in csv_paths:
-            label = f"{path.parent.name} / {path.name}"                                                                               # Friendly label showing batch folder and file name
-            self.csv_viewer_file_combo.addItem(label, str(path))                                                                      # Store full path as hidden combo data
+        self._load_specific_csvs([str(path) for path in csv_paths])                                                                   # Load every generated CSV into one combined table
 
-    def _load_selected_csv(self):
-        csv_path = self.csv_viewer_file_combo.currentData()                                                                           # Full CSV path stored in combo item data
+    def _load_specific_csvs(self, csv_paths):
+        combined_headers = None
+        combined_rows = []
 
-        if not csv_path:
-            QMessageBox.warning(self, "No CSV Selected", "Please select a generated CSV file first.")
+        for path_str in csv_paths:
+            path = Path(path_str)
+
+            try:
+                with open(path, "r", encoding="utf-8-sig", newline="") as file:
+                    reader = csv.reader(file)
+                    rows = list(reader)
+
+                if not rows:
+                    continue
+
+                headers = rows[0]
+                data_rows = rows[1:]
+
+                if combined_headers is None:
+                    combined_headers = ["Source CSV"] + headers                                                                       # Add source column when combining multiple CSV files
+
+                if headers != combined_headers[1:]:
+                    logging.warning("Skipping CSV with different headers: %s", path)
+                    continue
+
+                source_label = f"{path.parent.name} / {path.name}"
+
+                for row in data_rows:
+                    combined_rows.append([source_label] + row)
+
+            except Exception:
+                logging.error("Failed to read selected CSV for combined viewer: %s", path, exc_info=True)
+
+        if combined_headers is None or not combined_rows:
+            QMessageBox.information(self, "No Data", "No readable CSV rows were found.")
             return
 
-        if not os.path.exists(csv_path):
-            QMessageBox.warning(self, "CSV Not Found", "The selected CSV file no longer exists.")
-            self._refresh_csv_viewer_files()
+        self._load_csv_rows_into_viewer(combined_headers, combined_rows)                                                              # Display selected CSVs in one combined table
+
+    def _load_csv_rows_into_viewer(self, headers, data_rows):
+        self.csv_viewer_table.setSortingEnabled(False)                                                                                # Disable sorting while rebuilding table
+        self.csv_viewer_table.clear()
+        self.csv_viewer_table.setColumnCount(len(headers))
+        self.csv_viewer_table.setRowCount(len(data_rows))
+        self.csv_viewer_table.setHorizontalHeaderLabels(headers)
+
+        for row_index, row_values in enumerate(data_rows):
+            for col_index, value in enumerate(row_values):
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)                                                                      # Keep CSV viewer read-only
+                self.csv_viewer_table.setItem(row_index, col_index, item)
+
+        self.csv_viewer_table.resizeColumnsToContents()                                                                               # Auto-size columns after loading
+        self.csv_viewer_table.setSortingEnabled(True)                                                                                 # Re-enable sorting after load
+        self._build_csv_column_checkboxes(headers)                                                                                    # Rebuild column visibility checkboxes
+
+    def _update_csv_selected_files_label(self):
+        count = len(getattr(self, "csv_selected_paths", []))
+
+        if count == 0:
+            self.csv_selected_files_label.setText("No CSV files selected")
+        elif count == 1:
+            path = Path(self.csv_selected_paths[0])
+            self.csv_selected_files_label.setText(f"Selected: {path.parent.name} / {path.name}")
+        else:
+            self.csv_selected_files_label.setText(f"{count} CSV files selected")
+
+    def _open_csv_file_selector(self):
+        if not getattr(self, "csv_available_paths", []):
+            QMessageBox.information(self, "No CSV Files", "No generated CSV files were found.")
             return
 
-        try:
-            with open(csv_path, "r", encoding="utf-8-sig", newline="") as file:
-                reader = csv.reader(file)
-                rows = list(reader)                                                                                                   # Read whole CSV into memory for table display
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select CSV Files")
+        dialog.resize(520, 420)                                                                                                       # Compact popup for choosing multiple generated CSVs
 
-            if not rows:
-                QMessageBox.information(self, "Empty CSV", "The selected CSV file is empty.")
-                return
+        dialog_layout = QVBoxLayout(dialog)
+        dialog_layout.setSpacing(10)
 
-            headers = rows[0]
-            data_rows = rows[1:]
+        csv_list = QListWidget()
+        csv_list.setObjectName("CsvFileSelectorList")                                                                                 # Checklist list shown only inside popup selector
 
-            self.csv_viewer_table.setSortingEnabled(False)                                                                            # Disable sorting while filling table
-            self.csv_viewer_table.clear()
-            self.csv_viewer_table.setColumnCount(len(headers))
-            self.csv_viewer_table.setRowCount(len(data_rows))
-            self.csv_viewer_table.setHorizontalHeaderLabels(headers)
+        for path_str in self.csv_available_paths:
+            path = Path(path_str)
+            label = f"{path.parent.name} / {path.name}"
 
-            for row_index, row_values in enumerate(data_rows):
-                for col_index, value in enumerate(row_values):
-                    item = QTableWidgetItem(value)
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)                                                                  # Make cells read-only like a viewer
-                    self.csv_viewer_table.setItem(row_index, col_index, item)
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, path_str)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if path_str in self.csv_selected_paths else Qt.Unchecked)
 
-            self.csv_viewer_table.resizeColumnsToContents()                                                                           # Auto-size columns after loading
-            self.csv_viewer_table.setSortingEnabled(True)                                                                             # Re-enable header sorting after load
+            csv_list.addItem(item)
 
-        except Exception as e:
-            QMessageBox.critical(self, "CSV Load Failed", f"Could not load CSV:\n{e}")
+        button_row = QHBoxLayout()
+
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.setObjectName("ActionButton")
+        select_all_btn.clicked.connect(lambda: [csv_list.item(i).setCheckState(Qt.Checked) for i in range(csv_list.count())])
+
+        clear_all_btn = QPushButton("Clear All")
+        clear_all_btn.setObjectName("ActionButton")
+        clear_all_btn.clicked.connect(lambda: [csv_list.item(i).setCheckState(Qt.Unchecked) for i in range(csv_list.count())])
+
+        button_row.addWidget(select_all_btn)
+        button_row.addWidget(clear_all_btn)
+        button_row.addStretch(1)
+
+        dialog_buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        dialog_buttons.accepted.connect(dialog.accept)
+        dialog_buttons.rejected.connect(dialog.reject)
+
+        dialog_layout.addWidget(csv_list)
+        dialog_layout.addLayout(button_row)
+        dialog_layout.addWidget(dialog_buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        selected_paths = []
+
+        for row in range(csv_list.count()):
+            item = csv_list.item(row)
+
+            if item.checkState() == Qt.Checked:
+                selected_paths.append(item.data(Qt.UserRole))
+
+        self.csv_selected_paths = selected_paths                                                                                      # Save checked CSV paths from popup selector
+        self._update_csv_selected_files_label()                                                                                       # Update compact selected-file summary
+
+    def _build_csv_column_checkboxes(self, headers):
+        while self.csv_column_checkbox_layout.count():
+            item = self.csv_column_checkbox_layout.takeAt(0)                                                                          # Remove old checkbox widgets from previous CSV
+            widget = item.widget()
+
+            if widget:
+                widget.deleteLater()
+
+        self.csv_column_checkboxes = []                                                                                               # Reset checkbox reference list
+
+        self.csv_show_all_columns_checkbox = QCheckBox("Show All Columns")                                                            # Recreate master checkbox after clearing old layout
+        self.csv_show_all_columns_checkbox.setChecked(True)                                                                           # Default to showing every CSV column
+        self.csv_show_all_columns_checkbox.stateChanged.connect(self._toggle_all_csv_columns)                                         # Toggle all column checkboxes at once
+        self.csv_column_checkbox_layout.addWidget(self.csv_show_all_columns_checkbox, 0, 0)                                           # Place master checkbox with all column visibility checkboxes
+
+        for col_index, header in enumerate(headers):
+            checkbox = QCheckBox(header)
+            checkbox.setChecked(True)                                                                                                 # All columns visible by default
+            checkbox.column_index = col_index                                                                                         # Store matching table column index
+            checkbox.stateChanged.connect(self._apply_csv_column_visibility)                                                          # Toggle table column when checked/unchecked
+
+            grid_index = col_index + 1                                                                                                # Offset by one because Show All Columns uses first grid slot
+            row = grid_index % 2                                                                                                      # Stack checkboxes into 2 rows
+            col = grid_index // 2                                                                                                     # Add new columns left-to-right
+            self.csv_column_checkbox_layout.addWidget(checkbox, row, col)                                                             # Place checkbox into compact 2-row grid
+
+            self.csv_column_checkboxes.append(checkbox)
+
+        self._apply_csv_column_visibility()                                                                                           # Apply initial all-visible state
+
+    def _apply_csv_column_visibility(self):
+        if not hasattr(self, "csv_viewer_table"):
+            return                                                                                                                    # CSV viewer has not been created yet
+
+        for checkbox in getattr(self, "csv_column_checkboxes", []):
+            col_index = checkbox.column_index                                                                                         # Table column controlled by this checkbox
+            self.csv_viewer_table.setColumnHidden(col_index, not checkbox.isChecked())                                                # Hide unchecked columns
+
+    def _show_all_csv_columns(self):
+        for checkbox in getattr(self, "csv_column_checkboxes", []):
+            checkbox.setChecked(True)                                                                                                 # Show every CSV column
+
+        self._apply_csv_column_visibility()                                                                                           # Apply table visibility after bulk change
+
+    def _hide_all_csv_columns(self):
+        for checkbox in getattr(self, "csv_column_checkboxes", []):
+            checkbox.setChecked(False)                                                                                                # Hide every CSV column
+
+        self._apply_csv_column_visibility()                                                                                           # Apply table visibility after bulk change
+
+    def _apply_csv_filter(self):
+        if not hasattr(self, "csv_viewer_table"):
+            return                                                                                                                    # CSV viewer has not been created yet
+
+        filter_text = self.csv_filter_text.text().strip().lower()                                                                     # Case-insensitive filter text
+        selected_column = self.csv_filter_column_combo.currentData()                                                                  # -1 means all columns
+
+        for row in range(self.csv_viewer_table.rowCount()):
+            should_show = True                                                                                                        # Show all rows when filter is empty
+
+            if filter_text:
+                should_show = False
+
+                if selected_column == -1:
+                    for col in range(self.csv_viewer_table.columnCount()):
+                        item = self.csv_viewer_table.item(row, col)
+                        cell_text = item.text().lower() if item else ""
+
+                        if filter_text in cell_text:
+                            should_show = True                                                                                        # Match found in any column
+                            break
+                else:
+                    item = self.csv_viewer_table.item(row, selected_column)
+                    cell_text = item.text().lower() if item else ""
+                    should_show = filter_text in cell_text                                                                            # Match found in selected column only
+
+            self.csv_viewer_table.setRowHidden(row, not should_show)                                                                  # Hide non-matching rows
+
+    def _clear_csv_filter(self):
+        self.csv_filter_text.clear()                                                                                                  # Empty filter text
+        self.csv_filter_column_combo.setCurrentIndex(0)                                                                               # Reset to All Columns
+        self._apply_csv_filter()                                                                                                      # Show all rows again
 
     def _build_csv_sftp_tab(self):
         page = QWidget()
