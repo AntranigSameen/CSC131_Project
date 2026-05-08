@@ -4517,6 +4517,31 @@ class SettingsWindow(QMainWindow):
                 color: #111827;
                 text-decoration: underline;
             }
+                           
+            QMenu {
+                background-color: #f8fbff;
+                border: 1px solid #bdd7ee;
+                border-radius: 8px;
+                padding: 4px;
+            }
+
+            QMenu::item {
+                background-color: transparent;
+                color: #102033;
+                padding: 6px 18px;
+                border-radius: 6px;
+            }
+
+            QMenu::item:selected {
+                background-color: #cfe8ff;
+                color: #102033;
+            }
+
+            QMenu::separator {
+                height: 1px;
+                background: #c7dff5;
+                margin: 4px 8px;
+            }
         """)
 
 # ==========
