@@ -581,7 +581,7 @@ class SettingsWindow(QMainWindow):
         expanded_button.setText(f"{icon_text}  {tooltip_text}")                                                                       # Expanded sidebar shows icon plus page name
         expanded_button.setToolTip(tooltip_text)                                                                                      # Show page name when hovering over sidebar item
         expanded_button.setCheckable(True)                                                                                            # Allow active/selected styling
-        expanded_button.setFixedSize(203, 36)                                                                                         # Slim expanded sidebar row size
+        expanded_button.setFixedSize(203, 37)                                                                                         # Slim expanded sidebar row size
         expanded_button.clicked.connect(lambda checked=False, idx=page_index: self._set_sidebar_page(idx))                            # Switch stacked page when clicked
 
         collapsed_button = QToolButton()                                                                                              # QToolButton keeps collapsed icon-only tiles clean and centered
@@ -641,9 +641,9 @@ class SettingsWindow(QMainWindow):
 
                 expanded_button = item["expanded"]
                 expanded_button.show()                                                                                                # Show expanded icon plus label button
-                expanded_button.setFixedSize(203, 36)                                                                                 # Keep expanded row slim
-                expanded_button.setMinimumSize(203, 36)                                                                               # Prevent light/dark stylesheet from resizing row
-                expanded_button.setMaximumSize(203, 36)                                                                               # Prevent light/dark stylesheet from resizing row
+                expanded_button.setFixedSize(203, 37)                                                                                 # Keep expanded row slim
+                expanded_button.setMinimumSize(203, 37)                                                                               # Prevent light/dark stylesheet from resizing row
+                expanded_button.setMaximumSize(203, 37)                                                                               # Prevent light/dark stylesheet from resizing row
 
         self.sidebar_indicator.show()                                                                                                 # Keep selected page indicator visible
         self._move_sidebar_indicator(self.page_stack.currentIndex())                                                                  # Re-align indicator after sidebar size changes
