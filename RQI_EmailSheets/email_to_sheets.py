@@ -38,6 +38,7 @@ from Proper_MS.utils import app_data_dir, resource_path, writable_env_file
 from Proper_MS.acuity_registration import update_aha_registration_status
 from Proper_MS.dashboard_events import dashboard_event
 from Proper_MS.dashboard_metrics import increment_paid_today
+from Proper_MS.location_keys import load_location_keys
 
 # --------------------------------------------------------------------
 # Environment Variables
@@ -499,6 +500,27 @@ def persist_email_snapshot_to_env(
         set_key(env_path, key, str(value or ""))
         os.environ[key] = str(value or "")
 
+
+def resolve_location_name_from_keys(appointment_where: str) -> str:
+    where_text = (appointment_where or "").strip().lower()
+
+    if not where_text:
+        return ""
+
+    try:
+        location_pairs = load_location_keys()
+    except Exception as e:
+        logging.warning("Could not load location keys for LocationName fallback: %s", e)
+        return ""
+
+    for location_name, address_key in location_pairs.items():
+        clean_location_name = (location_name or "").strip()
+        clean_address_key = (address_key or "").strip().lower()
+
+        if clean_location_name and clean_address_key and clean_address_key in where_text:
+            return clean_location_name
+
+    return ""
 
 def extract_mmddyyyy_for_aha_date(appointment_when: str, fallback: str = "") -> str:
     """Best-effort date normalization to mm/dd/yyyy for AHA sheet date updates."""
@@ -1553,6 +1575,17 @@ def main():
                     "Set Group from appointment What field for msg %s: %s",
                     msg_id,
                     fields["Group"],
+                )
+
+        if not (fields.get("LocationName") or "").strip():
+            location_from_keys = resolve_location_name_from_keys(appointment.get("where", ""))
+
+            if location_from_keys:
+                fields["LocationName"] = location_from_keys
+                logging.info(
+                    "Set LocationName from location key address fallback for msg %s: %s",
+                    msg_id,
+                    location_from_keys,
                 )
 
         # Ensure Status is populated for rows appended from processed emails.

@@ -3,7 +3,7 @@ GA Chamblee|GA Chamblee
 GA Decatur|GA Decatur
 GA Exchange|GA Exchange
 TN Bartlett|TN Bartlett
-TN Brentwood|TN Brentwood
+TN Brentwood|201 Summit View Drive, Suite 300, Office 320, Brentwood, Tennessee 37027
 TN Film|TN Film
 TN Music|TN Music
 TN Perkins|TN Perkins
