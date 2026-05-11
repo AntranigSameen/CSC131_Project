@@ -1,11 +1,11 @@
 # key|location
-GA Chamblee|GA Chamblee
-GA Decatur|GA Decatur
+Chamblee|2900 Chamblee Tucker Road, Building 11, Suite 100C, Chamblee, GA 30341
+Decatur|3576 Covington Highway, Suite 206, Office B, Decatur, GA 30032
 GA Exchange|GA Exchange
-TN Bartlett|TN Bartlett
-TN Brentwood|201 Summit View Drive, Suite 300, Office 320, Brentwood, Tennessee 37027
+Bartlett|TN Bartlett
+Brentwood|201 Summit View Drive, Suite 300, Office 320, Brentwood, Tennessee 37027
 TN Film|TN Film
-TN Music|TN Music
-TN Perkins|TN Perkins
+Music Circle|1 Music Circle North, Suite 418, Nashville, Tennessee 37203
+Perkins|3885 S. Perkins, Suite 1, Office 19, Memphis, TN 38118
 TN Poplar|TN Poplar
 TN Sycamore|TN Sycamore
