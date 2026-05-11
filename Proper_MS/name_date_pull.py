@@ -16,7 +16,6 @@ SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 
 if not SENDER_EMAIL:
     logging.error("SENDER_EMAIL not found in environment variables")       # Log the missing variable for debugging
-    raise ValueError("SENDER_EMAIL not found in environment variables")
 
 #===========================
 # Pulling email data

@@ -2,7 +2,7 @@ import json
 import os
 from typing import Dict, Any
 
-from utils import base_dir, resource_path
+from utils import app_data_dir, resource_path
 
 
 DEFAULT_TEMPLATE_CONFIG: Dict[str, Any] = {
@@ -57,7 +57,7 @@ def get_location_templates_file_path() -> str:
     configured = (os.getenv("LOCATION_EMAIL_TEMPLATES_FILE") or "").strip()
     if configured:
         return configured
-    return os.path.join(base_dir(), "location_email_templates.json")
+    return os.path.join(app_data_dir(), "location_email_templates.json")
 
 
 def ensure_location_templates_file() -> str:

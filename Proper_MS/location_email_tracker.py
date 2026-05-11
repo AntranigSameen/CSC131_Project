@@ -2,14 +2,14 @@ import os
 from datetime import datetime
 from typing import List, Tuple
 
-from utils import base_dir
+from utils import app_data_dir
 
 
 def get_tracker_file_path() -> str:
     configured = (os.getenv("LOCATION_EMAIL_TRACKER_FILE") or "").strip()
     if configured:
         return configured
-    return os.path.join(base_dir(), "location_email_tracker.txt")
+    return os.path.join(app_data_dir(), "location_email_tracker.txt")
 
 
 def load_tracker_entries() -> List[Tuple[str, str]]:

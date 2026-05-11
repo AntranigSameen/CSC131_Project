@@ -5,7 +5,7 @@
 import logging
 from pathlib import Path
 
-from utils import base_dir
+from utils import app_data_dir
 
 
 # =====================
@@ -15,7 +15,7 @@ from utils import base_dir
 _SPLIT_LOGGING_INSTALLED = False                                                                                                      # Prevent duplicate handlers when setup is called more than once
 
 def _logs_dir():
-    path = Path(base_dir()) / "logs"                                                                                                  # Store separated logs in a dedicated logs folder beside app runtime files
+    path = Path(app_data_dir()) / "logs"                                                                                              # Store separated logs in a dedicated logs folder beside app runtime files
     path.mkdir(parents=True, exist_ok=True)                                                                                           # Create logs folder if it does not exist yet
     for file_name in ["rqi.log", "aha.log", "sftp.log", "errors.log"]:
         (path / file_name).touch(exist_ok=True)                                                                                       # Ensure each separated log file exists

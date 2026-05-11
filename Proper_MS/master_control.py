@@ -12,7 +12,7 @@ from queue import Queue
 from pathlib import Path
 from dotenv import load_dotenv
 
-from utils import resource_path, log_file, base_dir, load_settings, env_file, ensure_external_env
+from utils import resource_path, log_file, app_data_dir, base_dir, load_settings, env_file, ensure_external_env
 
 from dashboard_events import dashboard_event                                                                                         # Human-readable mini live log event helper
 from split_logging import setup_split_logging                                                                                        # Set up separate log files for different services    
@@ -82,7 +82,7 @@ def aha_credentials_exist():
 
 
 def aha_session_exists():
-    aha_auth_file = Path(base_dir()) / "aha_auth.json"                                                                               # Saved Playwright AHA login state file
+    aha_auth_file = Path(app_data_dir()) / "aha_auth.json"                                                                           # Saved Playwright AHA login state file
     return aha_auth_file.exists()                                                                                                    # True when session file already exists
 
 
@@ -311,12 +311,28 @@ def set_status(status):
 # EMAIL TO SHEETS THREAD
 #========================
 
+def _safe_email_to_sheets_runner():
+    logging.info("[RQI] email_to_sheets thread entered")
+
+    try:
+        email_to_sheets_worker(
+            pause_all_event=pause_all_event,
+            pause_email_event=pause_email_to_sheets_event,
+        )
+
+    except Exception as e:
+        logging.exception("[RQI] email_to_sheets thread crashed: %s", e)
+
+
 def start_email_to_sheets():
-    thread = threading.Thread(target=email_to_sheets_worker,
-                              kwargs={"pause_all_event": pause_all_event,
-                                      "pause_email_event": pause_email_to_sheets_event,},
-                                      daemon=True,)                                                                                  # Run email-to-sheets in background daemon thread with pause controls
-    thread.start()                                                                                                                   # Start continuous email-to-sheets worker
+    thread = threading.Thread(
+        target=_safe_email_to_sheets_runner,
+        daemon=True,
+    )                                                                                                                                 # Run RQI email parser inside protected wrapper so startup crashes are visible in logs
+
+    thread.start()
+
+    logging.info("[RQI] email_to_sheets thread started")
 
 #===================
 # AUTOMATION WORKER
@@ -441,6 +457,7 @@ def open_settings_window():
 
 def start_background_services():
     logging.info("Starting RQI Email to Sheets Searches")
+    logging.info("[RQI] About to start email_to_sheets.run_forever thread")
     start_email_to_sheets()                                                                                                          # Email-to-sheets in daemon thread
 
     logging.info("Starting Automation Loop in Daemon Thread")

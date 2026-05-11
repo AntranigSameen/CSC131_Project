@@ -34,7 +34,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "RQI_EmailSheets"))
 
 from Proper_MS.outlook_authentication import authenticate
-from Proper_MS.utils import resource_path, writable_env_file
+from Proper_MS.utils import app_data_dir, resource_path, writable_env_file
 from Proper_MS.acuity_registration import update_aha_registration_status
 from Proper_MS.dashboard_events import dashboard_event
 from Proper_MS.dashboard_metrics import increment_paid_today
@@ -234,19 +234,27 @@ def _write_csv_header_if_needed(csv_path: Path, headers: List[str]) -> None:
 def _ensure_current_batch_files(headers: List[str], force_new_batch: bool = False) -> Path:
     global _current_batch_start, _current_batch_dir, _current_batch_csv_path
 
-    current_batch_start = _resolve_batch_start()                                                                                      # Determine the active upload window start time
-    current_batch_dir, current_batch_csv_path = _build_batch_paths(current_batch_start)                                              # Build the active subfolder path and CSV path
+    with _batch_state_lock:
+        if (
+            _current_batch_start is not None
+            and _current_batch_dir is not None
+            and _current_batch_csv_path is not None
+            and _current_batch_csv_path.exists()
+            and not force_new_batch
+        ):
+            _write_csv_header_if_needed(_current_batch_csv_path, headers)                                                             # Keep appending to the active batch until maybe_roll_batch_window rolls it
+            return _current_batch_csv_path
+
+    current_batch_start = _resolve_batch_start()                                                                                      # Only choose a batch window when starting fresh or forcing a new batch
+    current_batch_dir, current_batch_csv_path = _build_batch_paths(current_batch_start)
 
     with _batch_state_lock:
-        batch_changed = force_new_batch or _current_batch_start != current_batch_start or _current_batch_csv_path != current_batch_csv_path
+        _current_batch_start = current_batch_start                                                                                    # Save active batch start
+        _current_batch_dir = current_batch_dir                                                                                        # Save active batch folder
+        _current_batch_csv_path = current_batch_csv_path                                                                              # Save active CSV path
 
-        if batch_changed:
-            _current_batch_start = current_batch_start                                                                                # Save active batch start time in shared state
-            _current_batch_dir = current_batch_dir                                                                                    # Save active batch folder path in shared state
-            _current_batch_csv_path = current_batch_csv_path                                                                          # Save active CSV file path in shared state
-
-        _ensure_directory(_current_batch_dir)                                                                                         # Ensure the batch subfolder exists
-        _write_csv_header_if_needed(_current_batch_csv_path, headers)                                                                 # Ensure CSV file exists and has header row
+        _ensure_directory(_current_batch_dir)                                                                                         # Ensure active batch folder exists
+        _write_csv_header_if_needed(_current_batch_csv_path, headers)                                                                 # Ensure active CSV file exists and has headers
 
         return _current_batch_csv_path
 
@@ -1127,7 +1135,8 @@ def setup_logging():
     else:
         base_dir = Path(__file__).parent
 
-    log_file = base_dir / "email_to_sheets.log"
+    log_file = Path(app_data_dir()) / "logs" / "email_to_sheets.log"                                                                  # Store RQI log in writable AppData logs folder
+    log_file.parent.mkdir(parents=True, exist_ok=True)                                                                                # Ensure AppData logs folder exists before writing log file
 
     logging.basicConfig(
         level=logging.INFO,
@@ -1420,12 +1429,15 @@ def main():
     """
     Main processing function - one complete cycle of checking and processing emails.
     """
+    logging.info("[RQI] email_to_sheets main() entered")
     if PROVIDER != "outlook":
         raise RuntimeError("EMAIL_PROVIDER must be 'outlook' (this script is Outlook-only).")
 
     logging.debug("Starting Outlook(Graph) -> Sheets processing...")
 
+    logging.info("[RQI] Connecting to RQI Google Sheet")
     ws = get_worksheet()
+    logging.info("[RQI] Connected to RQI Google Sheet")
     sheet_headers = ws.row_values(1)
     if not sheet_headers:
         sheet_headers = DEFAULT_HEADERS
@@ -1437,7 +1449,9 @@ def main():
 
     maybe_roll_batch_window(sheet_headers)                                                                                            # Ensure the current CSV batch exists before processing any unread emails
 
+    logging.info("[RQI] Authenticating Microsoft account for RQI email search")
     token = authenticate()
+    logging.info("[RQI] Microsoft authentication returned for RQI email search")
     if not token:
         raise RuntimeError("Authentication failed: no access token returned.")
 
@@ -1451,8 +1465,9 @@ def main():
     except Exception as e:
         logging.warning("Could not fetch user profile: %s", e)
 
+    logging.info("[RQI] Fetching unread Outlook messages")
     msgs = fetch_unread_messages(token, limit=50)
-    logging.debug("Found %d unread messages", len(msgs))
+    logging.info("[RQI] Found %d unread messages after sender filtering", len(msgs))
 
     if SENDER_EMAILS:
         print(f"Found {len(msgs)} unread messages (sender filter={SENDER_EMAILS!r})")
@@ -1640,6 +1655,8 @@ def main():
 
         print(f"✅ Appended row / subject: {subject} / from: {sender}")
 
+    logging.info("[RQI] email_to_sheets cycle completed. Processed messages: %d", len(msgs))
+
     if msgs:
         print(f"\n✅ Successfully processed {len(msgs)} email(s)")
         print(f"   📊 Added {len(msgs)} row(s) to Google Sheets")
@@ -1655,8 +1672,10 @@ def main():
 
 def run_forever(interval=INTERVAL, pause_all_event=None, pause_email_event=None):
     setup_logging()
+    logging.info("[RQI] email_to_sheets run_forever started")
 
     while True:
+        logging.info("[RQI] email_to_sheets cycle starting")
         if pause_all_event is not None:
             pause_all_event.wait()                                                                                                  # Block when user pauses all automation
 

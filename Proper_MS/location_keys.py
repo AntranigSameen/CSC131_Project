@@ -1,10 +1,10 @@
 import os
 from typing import Dict
 
-from utils import base_dir, resource_path
+from utils import app_data_dir, resource_path
 
 
-LOCATION_KEYS_FILE = os.path.join(base_dir(), "location_keys.txt")
+LOCATION_KEYS_FILE = os.path.join(app_data_dir(), "location_keys.txt")
 
 
 def ensure_location_keys_file() -> str:

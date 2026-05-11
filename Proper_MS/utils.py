@@ -22,6 +22,15 @@ def base_dir():
 
     return os.path.dirname(os.path.abspath(__file__))
 
+# ===================
+# App Data Directory
+# ===================
+
+def app_data_dir():
+    path = os.path.join(os.getenv("APPDATA"), "Automation Machine")                                                                   # Store writable runtime/config files in AppData instead of Program Files
+    os.makedirs(path, exist_ok=True)
+    return path
+
 # ================================
 # Resource Path (for PyInstaller)
 # ================================
@@ -41,18 +50,19 @@ def resource_path(relative_path):
 # ======================
 
 def logs_dir():
-    path = os.path.join(base_dir(), "logs")
+    path = os.path.join(app_data_dir(), "logs")                                                                                       # Logs must be writable on installed client machines
     os.makedirs(path, exist_ok=True)
     return path
 
 def env_file():
-    external_env = os.path.join(base_dir(), ".env")
+    external_env = os.path.join(app_data_dir(), ".env")                                                                              # Prefer writable AppData .env for installed application
     if os.path.exists(external_env):
         return external_env
-    return resource_path(".env")
+
+    return resource_path(".env")                                                                                                     # Fall back to bundled .env during first launch
 
 def writable_env_file():
-    return os.path.join(base_dir(), ".env")
+    return os.path.join(app_data_dir(), ".env")                                                                                      # Installed applications cannot safely write to Program Files
 
 def ensure_external_env():
     target = writable_env_file()

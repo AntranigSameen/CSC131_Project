@@ -4,7 +4,7 @@ import sys
 import time
 import requests
 from pathlib import Path
-from utils import resource_path, base_dir, update_aha_registration_status
+from utils import app_data_dir, resource_path, update_aha_registration_status
 from datetime import datetime, timedelta
 from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
@@ -22,7 +22,7 @@ except Exception:
 #ROOT = Path(__file__).resolve().parents[1]
 
 SERVICE_ACCOUNT_JSON = resource_path(os.getenv("SERVICE_ACCOUNT_AHA_JSON", "google_sheet_api_key.json"))  # google service account key file
-PROJECT_DIR = Path(base_dir())  # folder that contains this script
+PROJECT_DIR = Path(app_data_dir())  # folder that contains this script
 SAVED_LOGIN = PROJECT_DIR / "aha_auth.json"  # saved Edge login state (created by setup_login.py)
 GOOGLE_SHEET_URL = os.getenv(
     "GOOGLE_SHEET_URL",

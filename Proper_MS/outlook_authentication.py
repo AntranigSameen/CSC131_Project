@@ -6,6 +6,7 @@ import logging
 import msal
 import os
 from dotenv import load_dotenv
+from utils import app_data_dir
 
 # ===========================
 # Load environment variables
@@ -17,7 +18,9 @@ CLIENT_ID = (os.getenv("CLIENT_ID") or "").strip()                              
 TENANT_ID = (os.getenv("TENANT_ID") or "").strip()                                                                                    # Microsoft Entra tenant ID for organization account
 AUTHORITY = (os.getenv("AUTHORITY") or "").strip()                                                                                    # Microsoft login authority URL
 SCOPES_RAW = (os.getenv("SCOPES") or "").strip()                                                                                      # Comma-separated Microsoft Graph delegated scopes
-CACHE_FILE = (os.getenv("CACHE_FILE") or "token_cache.json").strip()                                                                  # MSAL token cache file
+CACHE_FILE = os.path.expandvars(
+    (os.getenv("CACHE_FILE") or os.path.join(app_data_dir(), "token_cache.json")).strip()
+)                                                                                                                                     # MSAL token cache file
 
 #====================================
 # Check loaded environment variables
@@ -60,6 +63,11 @@ def authenticate():
         result = app.acquire_token_interactive(scopes=SCOPES)
 
     if cache.has_state_changed:
+        cache_dir = os.path.dirname(CACHE_FILE)
+
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)                                                                                     # Ensure token cache folder exists before writing
+
         with open(CACHE_FILE, "w") as f:
             f.write(cache.serialize())
     
@@ -69,4 +77,3 @@ def authenticate():
 
     logging.error("Authentication failed: %s", result)                                                                                # Log the error description for debugging
     return None
-    

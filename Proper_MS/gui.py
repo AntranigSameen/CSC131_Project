@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QApplication, QCalendarWidget, QListWidgetItem, Q
                                QToolButton, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout, QFileDialog, QSpinBox, QListWidget, QComboBox, QTextEdit, 
                                QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,)
 
-from utils import writable_env_file, base_dir, log_file, resource_path
+from utils import app_data_dir, writable_env_file, base_dir, log_file, resource_path
 from location_keys import (
     load_location_keys,
     upsert_location_key,
@@ -69,7 +69,7 @@ RESTART_REQUIRED = {                                                            
 # REMINDER TEMPLATES
 # =====================
 
-TEMPLATE_DIR = Path(base_dir()) / "email_templates"                                                                                   # Folder that stores editable reminder email body template files
+TEMPLATE_DIR = Path(app_data_dir()) / "email_templates"                                                                               # Folder that stores editable reminder email body template files
 NOT_REGISTERED_TEMPLATE_FILE = TEMPLATE_DIR / "acuity_not_registered_email_body.txt"                                                  # Template file for non-registered Acuity users
 REGISTERED_TEMPLATE_FILE = TEMPLATE_DIR / "acuity_registered_email_body.txt"                                                          # Template file for registered Acuity users
 
@@ -179,7 +179,7 @@ def restart_application():
 # =================
 
 def sign_out():
-    aha_auth_file = Path(base_dir()) / "aha_auth.json"                                                                                # Saved AHA authentication state file
+    aha_auth_file = Path(app_data_dir()) / "aha_auth.json"                                                                            # Saved AHA authentication state file
     if aha_auth_file.exists():
         aha_auth_file.unlink()                                                                                                        # Delete saved login state so user must sign in again
         logging.info("User signed out: deleted AHA login state")
@@ -3561,7 +3561,7 @@ class SettingsWindow(QMainWindow):
         self._update_pause_controls()                                                                                                 # Keep pause button label synced with real state
 
     def _update_login_status(self):
-        aha_auth_file = Path(base_dir()) / "aha_auth.json"                                                                            # Saved AHA auth state file
+        aha_auth_file = Path(app_data_dir()) / "aha_auth.json"                                                                        # Saved AHA auth state file
         if aha_auth_file.exists():
             text = "Signed In"
             color = "#00bc8c"
@@ -3800,10 +3800,10 @@ class SettingsWindow(QMainWindow):
 
         log_paths = {
             "All Logs": log_file(),
-            "RQI": os.path.join(base_dir(), "logs", "rqi.log"),
-            "AHA": os.path.join(base_dir(), "logs", "aha.log"),
-            "SFTP": os.path.join(base_dir(), "logs", "sftp.log"),
-            "Errors": os.path.join(base_dir(), "logs", "errors.log"),
+            "RQI": os.path.join(app_data_dir(), "logs", "rqi.log"),
+            "AHA": os.path.join(app_data_dir(), "logs", "aha.log"),
+            "SFTP": os.path.join(app_data_dir(), "logs", "sftp.log"),
+            "Errors": os.path.join(app_data_dir(), "logs", "errors.log"),
         }                                                                                                                             # Runtime paths for each separated log file
 
         return log_paths.get(current_tab, log_file())                                                                                 # Default to main app log if selected tab is unknown

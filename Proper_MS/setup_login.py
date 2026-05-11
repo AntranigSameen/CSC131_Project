@@ -9,13 +9,13 @@ import time
 from dotenv import load_dotenv
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-from utils import base_dir, env_file
+from utils import app_data_dir, env_file
 
 # ============
 # Paths & URLs
 # ============
 
-current_dir = Path(base_dir())  # get the folder that contains the current file
+current_dir = Path(app_data_dir())  # get the folder that contains the current file
 logined_in_file = current_dir / "aha_auth.json"  # location to save aha_auth.json (session state)
 AHA_url = "https://atlas.heart.org/location"  # main AHA site URL
 
