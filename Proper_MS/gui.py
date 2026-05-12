@@ -1540,14 +1540,20 @@ class SettingsWindow(QMainWindow):
         self.csv_available_paths = []                                                                                                 # Store all discovered generated CSV paths
         self.csv_selected_paths = []                                                                                                  # Reset selected files when refreshing list
 
-        export_dir = os.path.expandvars((os.getenv("RQI_CSV_EXPORT_DIR") or "").strip())                                             # User-selected CSV export folder from settings
+        load_dotenv(CONFIG_FILE, override=True)                                                                                       # Reload latest GUI-saved CSV export folder before refreshing CSV viewer
+
+        export_dir = os.path.expandvars((os.getenv("RQI_CSV_EXPORT_DIR") or "").strip())                                              # User-selected CSV export folder from settings
 
         if not export_dir:
-            export_dir = str(Path(app_data_dir()) / "RQI_CSV_Exports")                                                               # Same writable default used by RQI CSV generator
+            export_dir = str(Path(app_data_dir()) / "RQI_CSV_Exports")                                                                # Same writable default used by RQI CSV generator
 
         if not os.path.isdir(export_dir):
-            QMessageBox.warning(self, "No CSV Export Folder", f"No valid RQI CSV export folder was found:\n\n{export_dir}")
-            return
+            try:
+                Path(export_dir).mkdir(parents=True, exist_ok=True)                                                                   # Create CSV export folder automatically if it does not exist
+            except Exception as e:
+                self.csv_selected_files_label.setText("No generated CSV files found")
+                logging.warning("Could not create CSV export folder %s: %s", export_dir, e)
+                return
 
         csv_paths = sorted(
             Path(export_dir).rglob("*.csv"),
