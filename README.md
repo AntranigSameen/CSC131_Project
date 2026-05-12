@@ -882,12 +882,12 @@ Potential improvements for future versions:
 
 ## License
 
-None
+None (CSUS student license)
 
 ---
 
 **Last Updated**: May 12, 2026  
-**Version**: 1.0.0  
+**Version**: 5.0.0  
 **Developed By**: CSC131 Team  
 **Project**: RQI Training Automation System
 
