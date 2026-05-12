@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from dotenv import set_key
+from dotenv import load_dotenv
 
 # Third-party imports
 import requests  # For making HTTP requests to Microsoft Graph API
@@ -34,7 +35,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "RQI_EmailSheets"))
 
 from Proper_MS.outlook_authentication import authenticate
-from Proper_MS.utils import app_data_dir, resource_path, writable_env_file
+from Proper_MS.utils import app_data_dir, resource_path, writable_env_file, env_file
 from Proper_MS.acuity_registration import update_aha_registration_status
 from Proper_MS.dashboard_events import dashboard_event
 from Proper_MS.dashboard_metrics import increment_paid_today
@@ -100,11 +101,19 @@ def _get_env_int(name: str, default: int) -> int:
 
 
 def _get_csv_export_dir() -> Path:
-    export_dir = (os.getenv("RQI_CSV_EXPORT_DIR") or "").strip()                                                                      # Root folder chosen by user for CSV exports
-    if export_dir:
-        return Path(export_dir)
+    load_dotenv(env_file(), override=True)                                                                                            # Reload latest GUI-saved CSV export folder before creating/searching CSVs
 
-    return PROJECT_ROOT / "RQI_CSV_Exports"                                                                                           # Fallback export directory when user has not configured one yet
+    export_dir = os.path.expandvars((os.getenv("RQI_CSV_EXPORT_DIR") or "").strip())                                                  # Root folder chosen by user for CSV exports
+
+    if export_dir:
+        selected_export_dir = Path(export_dir)
+        selected_export_dir.mkdir(parents=True, exist_ok=True)                                                                        # Ensure user-selected folder exists before writing CSVs
+        return selected_export_dir
+
+    default_export_dir = Path(app_data_dir()) / "RQI_CSV_Exports"                                                                     # Safe writable default export folder for installed app
+    default_export_dir.mkdir(parents=True, exist_ok=True)                                                                             # Ensure default folder exists even when user has not configured one
+
+    return default_export_dir
 
 
 def _get_csv_filename() -> str:
@@ -1529,53 +1538,47 @@ def main():
                     fields["LastName"] = parts[1]
                 logging.debug("Applied name fallback from appointment field for msg %s: %s", msg_id, appointment_name)
 
-        # LocationName always comes from appointment "What" text.
-        # Example: "Online BLS ... (CPR Lifeline, Nashville, Film House)" -> "Film House"
+        # Extract appointment What text for Group/course parsing.
         appointment_what = (appointment.get("what") or "").strip()
+
         # If appointment extraction didn't get What, try direct extraction from email text
         if not appointment_what:
             appointment_what = extract_labeled_field(body_text, "What")
+
         if appointment_what:
-            location_candidate = ""
             group_course = ""
 
             # Derive course level from "What" text.
             # Example: "Online BLS with Skills Check (...)" -> "BLS"
             course_match = re.search(r"\bonline\s+(.+?)(?:\s+with\b|\s*\(|$)", appointment_what, re.IGNORECASE)
+
             if course_match:
                 course_raw = course_match.group(1).strip()
+
                 if course_raw:
                     # Keep concise, stable token for Group label (first token, usually BLS/ACLS/PALS)
                     group_course = re.sub(r"[^A-Za-z0-9+/\- ]", "", course_raw).strip().split()[0] if course_raw.split() else ""
 
-            trailing_paren_match = re.search(r"\(([^()]*)\)\s*$", appointment_what)
-            if trailing_paren_match:
-                inside_parens = trailing_paren_match.group(1).strip()
-                if "," in inside_parens:
-                    segments = [seg.strip() for seg in inside_parens.split(",") if seg.strip()]
-                    if segments:
-                        location_candidate = segments[-1]
-
-            if not location_candidate and "," in appointment_what:
-                segments = [seg.strip() for seg in appointment_what.split(",") if seg.strip()]
-                if segments:
-                    location_candidate = segments[-1]
-
-            if location_candidate:
-                fields["LocationName"] = location_candidate
-                logging.debug(
-                    "Set LocationName from appointment What field for msg %s: %s",
-                    msg_id,
-                    location_candidate,
-                )
-
             if group_course:
                 fields["Group"] = f"HeartCode {group_course} Online - 2025"
+
                 logging.debug(
                     "Set Group from appointment What field for msg %s: %s",
                     msg_id,
                     fields["Group"],
                 )
+
+        # Resolve LocationName strictly from appointment address using configured location keys.
+        location_from_keys = resolve_location_name_from_keys(appointment.get("where", ""))
+
+        if location_from_keys:
+            fields["LocationName"] = location_from_keys
+
+            logging.info(
+                "Set LocationName from appointment address for msg %s: %s",
+                msg_id,
+                location_from_keys,
+            )
 
         if not (fields.get("LocationName") or "").strip():
             location_from_keys = resolve_location_name_from_keys(appointment.get("where", ""))

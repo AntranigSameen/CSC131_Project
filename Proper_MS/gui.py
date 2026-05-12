@@ -1540,10 +1540,13 @@ class SettingsWindow(QMainWindow):
         self.csv_available_paths = []                                                                                                 # Store all discovered generated CSV paths
         self.csv_selected_paths = []                                                                                                  # Reset selected files when refreshing list
 
-        export_dir = os.getenv("RQI_CSV_EXPORT_DIR", "").strip()                                                                      # Root folder where generated RQI CSV files are stored
+        export_dir = os.path.expandvars((os.getenv("RQI_CSV_EXPORT_DIR") or "").strip())                                             # User-selected CSV export folder from settings
 
-        if not export_dir or not os.path.isdir(export_dir):
-            self.csv_selected_files_label.setText("No CSV export folder found")
+        if not export_dir:
+            export_dir = str(Path(app_data_dir()) / "RQI_CSV_Exports")                                                               # Same writable default used by RQI CSV generator
+
+        if not os.path.isdir(export_dir):
+            QMessageBox.warning(self, "No CSV Export Folder", f"No valid RQI CSV export folder was found:\n\n{export_dir}")
             return
 
         csv_paths = sorted(
@@ -1595,10 +1598,13 @@ class SettingsWindow(QMainWindow):
         self._load_specific_csvs(selected_paths)                                                                                      # Display multiple selected CSVs together
 
     def _load_all_csvs(self):
-        export_dir = os.getenv("RQI_CSV_EXPORT_DIR", "").strip()                                                                      # Root folder where generated RQI CSV files are stored
+        export_dir = os.path.expandvars((os.getenv("RQI_CSV_EXPORT_DIR") or "").strip())                                             # User-selected CSV export folder from settings
 
-        if not export_dir or not os.path.isdir(export_dir):
-            QMessageBox.warning(self, "No CSV Export Folder", "No valid RQI CSV export folder was found.")
+        if not export_dir:
+            export_dir = str(Path(app_data_dir()) / "RQI_CSV_Exports")                                                               # Same writable default used by RQI CSV generator
+
+        if not os.path.isdir(export_dir):
+            QMessageBox.warning(self, "No CSV Export Folder", f"No valid RQI CSV export folder was found:\n\n{export_dir}")
             return
 
         csv_paths = sorted(
