@@ -2541,16 +2541,15 @@ class SettingsWindow(QMainWindow):
 
     def _refresh_manual_location_combo(self):
         """Refresh the location dropdown with current location keys."""
-        from manual_email_handler import get_available_locations
-        
         try:
             self.manual_location_combo.clear()
-            locations = get_available_locations()
-            
-            for location in locations:
-                self.manual_location_combo.addItem(location)
-                
+            location_pairs = load_location_keys()
+
+            for key in sorted(location_pairs.keys(), key=lambda value: value.lower()):
+                self.manual_location_combo.addItem(key, key)                                                                          # Show and store the location key, not the address
+
             self._log_to_manual_send("✓ Locations refreshed")
+
         except Exception as e:
             self._log_to_manual_send(f"✗ Failed to refresh locations: {e}")
 
@@ -2584,7 +2583,7 @@ class SettingsWindow(QMainWindow):
         
         try:
             email = self.manual_email_input.text().strip()
-            location = self.manual_location_combo.currentText().strip()
+            location = (self.manual_location_combo.currentData() or self.manual_location_combo.currentText() or "").strip()            # Use location key, not address
             first_name = self.manual_first_name_input.text().strip()
             last_name = self.manual_last_name_input.text().strip()
             custom_subject = self.manual_subject_input.text().strip()
@@ -2644,7 +2643,7 @@ class SettingsWindow(QMainWindow):
         
         try:
             email = self.manual_email_input.text().strip()
-            location = self.manual_location_combo.currentText().strip()
+            location = (self.manual_location_combo.currentData() or self.manual_location_combo.currentText() or "").strip()                       # Use location key, not address
             first_name = self.manual_first_name_input.text().strip()
             last_name = self.manual_last_name_input.text().strip()
             cycle_marker = self.manual_cycle_marker_input.text().strip()
@@ -2818,11 +2817,11 @@ class SettingsWindow(QMainWindow):
         form.setSpacing(10)
 
         self.location_key_edit = QLineEdit()
-        self.location_key_edit.setPlaceholderText("Location key (example: SAC_MAIN)")
+        self.location_key_edit.setPlaceholderText("Sac State")
         form.addRow("Key", self.location_key_edit)
 
         self.location_name_edit = QLineEdit()
-        self.location_name_edit.setPlaceholderText("Location name (example: Sacramento Main Campus)")
+        self.location_name_edit.setPlaceholderText("6000 Jed Smith Dr, Sacramento, CA 95819")
         form.addRow("Location", self.location_name_edit)
 
         layout.addLayout(form)
@@ -2899,7 +2898,8 @@ class SettingsWindow(QMainWindow):
             upsert_location_key(key, location)
             template_created = ensure_location_template_entry(key, location)
             self._refresh_location_keys_list()
-            self._reload_location_templates_editor_from_disk()
+            self._refresh_location_template_key_list(key)                                                                             # Refresh Location Templates dropdown after adding/updating location key
+            self._reload_location_templates_editor_from_disk()                                                                        # Reload hidden template JSON after auto-creating template entry
             message = f"Location key saved: {key}"
             if template_created:
                 message += "\n\nA matching location email template entry was also created."
@@ -2926,7 +2926,8 @@ class SettingsWindow(QMainWindow):
 
             remove_location_template_entry(key)
             self._refresh_location_keys_list()
-            self._reload_location_templates_editor_from_disk()
+            self._refresh_location_template_key_list()                                                                                # Refresh Location Templates dropdown after removing location key
+            self._reload_location_templates_editor_from_disk()                                                                        # Reload hidden template JSON after removing template entry
             self.location_key_edit.clear()
             self.location_name_edit.clear()
             QMessageBox.information(self, "Removed", f"Location key removed: {key}")
@@ -2961,42 +2962,35 @@ class SettingsWindow(QMainWindow):
             return None
 
     def _refresh_location_template_key_list(self, preferred_key: str = ""):
-        if not hasattr(self, "location_template_keys_list"):
+        if not hasattr(self, "location_template_key_combo"):
             return
 
-        parsed = self._parse_location_templates_editor_json(show_error=False)
-        if parsed is None:
-            return
+        location_pairs = load_location_keys()
+        keys = sorted(location_pairs.keys(), key=lambda value: value.lower())
 
-        by_key = parsed.get("by_key") if isinstance(parsed.get("by_key"), dict) else {}
-        # Keep insertion order so newly added locations appear at the bottom.
-        keys = list(by_key.keys())
+        self.location_template_key_combo.blockSignals(True)
+        self.location_template_key_combo.clear()
 
-        self.location_template_keys_list.clear()
         for key in keys:
-            self.location_template_keys_list.addItem(key)
+            self.location_template_key_combo.addItem(key, key)                                                                            # Display key and store key, never the address
 
-        target = (preferred_key or self.location_template_key_edit.text() or "").strip()
-        if not target and keys:
-            target = keys[0]
+        target = (preferred_key or "").strip()
 
         if target:
-            for idx in range(self.location_template_keys_list.count()):
-                item = self.location_template_keys_list.item(idx)
-                if (item.text() or "").strip() == target:
-                    self.location_template_keys_list.setCurrentRow(idx)
-                    break
+            index = self.location_template_key_combo.findData(target)
+            if index >= 0:
+                self.location_template_key_combo.setCurrentIndex(index)
+
+        self.location_template_key_combo.blockSignals(False)
+        self._sync_template_selection_to_inputs()
 
     def _sync_template_selection_to_inputs(self):
-        if not hasattr(self, "location_template_keys_list"):
+        if not hasattr(self, "location_template_key_combo"):
             return
 
-        selected_items = self.location_template_keys_list.selectedItems()
-        if not selected_items:
+        key = (self.location_template_key_combo.currentData() or self.location_template_key_combo.currentText() or "").strip()
+        if not key:
             return
-
-        key = selected_items[0].text().strip()
-        self.location_template_key_edit.setText(key)
 
         parsed = self._parse_location_templates_editor_json(show_error=False)
         if parsed is None:
@@ -3013,9 +3007,9 @@ class SettingsWindow(QMainWindow):
         if parsed is None:
             return
 
-        key = (self.location_template_key_edit.text() or "").strip()
+        key = (self.location_template_key_combo.currentData() or self.location_template_key_combo.currentText() or "").strip()
         if not key:
-            QMessageBox.warning(self, "Missing Template Key", "Enter or select a template key.")
+            QMessageBox.warning(self, "Missing Location", "Select a location first.")
             return
 
         subject = self.location_template_subject_edit.text().strip()
@@ -3033,9 +3027,14 @@ class SettingsWindow(QMainWindow):
             "body": body,
         }
 
-        self.location_templates_editor.setPlainText(json.dumps(parsed, indent=2) + "\n")
+        pretty_json = json.dumps(parsed, indent=2) + "\n"
+        self.location_templates_editor.setPlainText(pretty_json)                                                                      # Update hidden template JSON store
+
+        template_path = ensure_location_templates_file()
+        Path(template_path).write_text(pretty_json, encoding="utf-8")                                                                 # Save template immediately so email sender uses latest version
+
         self._refresh_location_template_key_list(preferred_key=key)
-        QMessageBox.information(self, "Template Saved", f"Template entry saved for key: {key}")
+        QMessageBox.information(self, "Template Saved", f"Template entry saved for location: {key}")
 
     def _format_location_templates_json(self):
         parsed = self._parse_location_templates_editor_json(show_error=True)
@@ -3057,49 +3056,31 @@ class SettingsWindow(QMainWindow):
         title = QLabel("Location Email Templates")
         title.setObjectName("SectionTitle")
 
-        subtitle = QLabel(
-            "Store per-location email formats in JSON. "
-            "Selection order is by_key, then by_location, then default."
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setObjectName("SectionSubtitle")
-
         layout.addWidget(title)
-        layout.addWidget(subtitle)
 
         ensure_location_templates_file()
         template_path = get_location_templates_file_path()
+
+        self.location_templates_editor = QPlainTextEdit()
+        self.location_templates_editor.hide()                                                                                         # Hidden JSON backing store for location template editor logic
+
+        try:
+            self.location_templates_editor.setPlainText(Path(template_path).read_text(encoding="utf-8"))                              # Load location template JSON without showing raw JSON in the UI
+        except Exception:
+            self.location_templates_editor.setPlainText("{}")                                                                         # Safe fallback if template file cannot be read
+
+        self.entries["LOCATION_EMAIL_TEMPLATES_JSON_EDITOR"] = self.location_templates_editor                                         # Keep Save Settings writing the hidden JSON store
 
         self.location_templates_path_label = QLabel(f"Template file: {template_path}")
         self.location_templates_path_label.setWordWrap(True)
         layout.addWidget(self.location_templates_path_label)
 
-        structured_hint = QLabel(
-            "Use the fields below to edit one location at a time. "
-            "This updates the JSON automatically so users do not need to hand-edit JSON."
-        )
-        structured_hint.setWordWrap(True)
-        structured_hint.setObjectName("SectionSubtitle")
-        layout.addWidget(structured_hint)
-
-        new_location_hint = QLabel(
-            "New locations appear at the bottom of the list below."
-        )
-        new_location_hint.setWordWrap(True)
-        new_location_hint.setObjectName("SectionSubtitle")
-        layout.addWidget(new_location_hint)
-
-        self.location_template_keys_list = QListWidget()
-        self.location_template_keys_list.setMinimumHeight(120)
-        self.location_template_keys_list.itemSelectionChanged.connect(self._sync_template_selection_to_inputs)
-        layout.addWidget(self.location_template_keys_list)
-
         template_form = QFormLayout()
         template_form.setSpacing(8)
 
-        self.location_template_key_edit = QLineEdit()
-        self.location_template_key_edit.setPlaceholderText("Template key (example: TN Film)")
-        template_form.addRow("Key", self.location_template_key_edit)
+        self.location_template_key_combo = QComboBox()
+        self.location_template_key_combo.currentTextChanged.connect(self._sync_template_selection_to_inputs)
+        template_form.addRow("Location", self.location_template_key_combo)
 
         self.location_template_subject_edit = QLineEdit()
         self.location_template_subject_edit.setPlaceholderText("Email subject")
@@ -3110,46 +3091,49 @@ class SettingsWindow(QMainWindow):
         self.location_template_body_edit.setPlaceholderText("Email body for the selected location key")
         template_form.addRow("Body", self.location_template_body_edit)
 
+        self.location_template_subject_edit.setPlaceholderText(
+            "Example: Your CPR Lifeline Appointment"
+        )
+
+        self.location_template_body_edit.setPlaceholderText(
+            "Example:\n\n"
+            "Hello {first_name},\n\n"
+            "Thank you for registering for your {course} class at {location}.\n\n"
+            "Your appointment date is {date}.\n\n"
+            "Thank you,\n"
+            "CPR Lifeline"
+        )
+
         layout.addLayout(template_form)
 
         template_actions = QHBoxLayout()
         template_actions.setContentsMargins(0, 0, 0, 0)
         template_actions.setSpacing(8)
 
+        variables_help = QLabel(
+            "Available variables: "
+            "{first_name}, {last_name}, {full_name}, "
+            "{email}, {location}, {course}, {date}"
+        )
+
+        variables_help.setObjectName("SectionSubtitle")
+        variables_help.setWordWrap(True)
+
+        layout.addWidget(variables_help)
+
         self.template_entry_save_btn = QPushButton("Save Selected Entry")
         self.template_entry_save_btn.setObjectName("ActionButton")
         self.template_entry_save_btn.clicked.connect(lambda: self._animate_button_press(self.template_entry_save_btn))
         self.template_entry_save_btn.clicked.connect(self._save_template_entry_from_inputs)
 
-        self.template_json_format_btn = QPushButton("Format JSON")
-        self.template_json_format_btn.setObjectName("ActionButton")
-        self.template_json_format_btn.clicked.connect(lambda: self._animate_button_press(self.template_json_format_btn))
-        self.template_json_format_btn.clicked.connect(self._format_location_templates_json)
 
         template_actions.addWidget(self.template_entry_save_btn)
-        template_actions.addWidget(self.template_json_format_btn)
         template_actions.addStretch(1)
         layout.addLayout(template_actions)
 
-        self.location_templates_editor = QPlainTextEdit()
-        self.location_templates_editor.setMinimumHeight(320)
-        self.location_templates_editor.setPlaceholderText(
-            '{\n  "default": {"subject": "...", "body": "..."},\n  "by_key": {},\n  "by_location": {}\n}'
-        )
-
-        try:
-            self.location_templates_editor.setPlainText(Path(template_path).read_text(encoding="utf-8"))
-        except Exception:
-            self.location_templates_editor.setPlainText("{}")
-
-        self._refresh_location_template_key_list()
-
-        self.entries["LOCATION_EMAIL_TEMPLATES_JSON_EDITOR"] = self.location_templates_editor
-        layout.addWidget(self.location_templates_editor, 1)
-
-        layout.addStretch(1)
+        self._refresh_location_template_key_list()                                                                                    # Populate Location Templates dropdown from saved Location Keys
         
-        return page                                                                                                                   # Return page so it can be placed inside the Locations horizontal tab
+        return page
 
     # ======================
     # LOCATION TRACKER PAGE

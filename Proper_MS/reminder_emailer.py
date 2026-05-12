@@ -9,12 +9,14 @@
 import os
 import json
 import hashlib
+import time
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, Any
 from location_keys import load_location_keys
 from location_email_tracker import load_tracker_hashes, append_tracker_hash
 from location_email_templates import load_location_templates
+from acuity_registration import update_aha_registration_status
 
 # Import Google Sheets client (lazy-loaded from run_automation)
 _GS_GC = None
@@ -58,6 +60,9 @@ def _tracking_id(email: str, location: str, cycle_marker: str = "") -> str:
 
 # Environment configuration
 REMINDER_EMAIL_DAYS = int(os.getenv("REMINDER_EMAIL_DAYS", "7"))
+REMINDER_MAX_EMAILS_PER_RUN = int(os.getenv("REMINDER_MAX_EMAILS_PER_RUN", "25"))                                                     # Maximum reminder/location emails sent per automation cycle
+REMINDER_SEND_DELAY_SECONDS = float(os.getenv("REMINDER_SEND_DELAY_SECONDS", "1"))                                                     # Delay between successful reminder/location sends
+
 GOOGLE_SHEET_URL = os.getenv(
     "GOOGLE_SHEET_URL",
     "https://docs.google.com/spreadsheets/d/143-IvGetu1Lz8InKi9lqNcJCiCziSvtD2954sgxxZRk/edit?gid=0#gid=0",
@@ -198,6 +203,39 @@ def _normalize_lookup_map(values: Dict[str, Dict[str, str]]) -> Dict[str, Dict[s
         normalized[(key or "").strip().lower()] = config
     return normalized
 
+class _SafeTemplateDict(dict):
+    def __missing__(self, key):
+        return "{" + key + "}"                                                                                                       # Leave unknown placeholders visible instead of breaking the whole template
+
+
+def _render_template(template: str, context: Dict[str, str]) -> str:
+    try:
+        return (template or "").format_map(_SafeTemplateDict(context))                                                               # Replace known placeholders while preserving unknown ones
+    except Exception:
+        return template or ""                                                                                                        # Never fall back to a different template because of one bad placeholder
+
+def _build_aha_row_context(
+    email: str,
+    first_name: str,
+    last_name: str,
+    course: str,
+    date_value: str,
+) -> Dict[str, str]:
+    full_name = " ".join(part for part in [first_name, last_name] if part).strip()
+
+    return {
+        "first_name": first_name or "",
+        "first name": first_name or "",
+        "last_name": last_name or "",
+        "last name": last_name or "",
+        "full_name": full_name,
+        "full name": full_name,
+        "name": full_name,
+        "email": email or "",
+        "course": course or "",
+        "date": date_value or "",
+        "today": datetime.now().strftime("%m/%d/%Y"),
+    }
 
 def _load_location_email_templates() -> Dict[str, Any]:
     """Load templates from file and merge legacy env JSON rules as by_location overrides."""
@@ -221,24 +259,34 @@ def _compose_location_email(
     location: str,
     location_key: str,
     templates: Dict[str, Any],
+    course: str = "",
+    date_value: str = "",
 ) -> tuple[str, str]:
     """Compose subject/body for a recipient using key/location/default template selection."""
     full_name = " ".join(part for part in [first_name, last_name] if part).strip() or "there"
+
     context = {
         "first_name": first_name or "there",
+        "first name": first_name or "there",
         "last_name": last_name or "",
+        "last name": last_name or "",
         "full_name": full_name,
-        "email": recipient_email,
+        "full name": full_name,
+        "name": full_name,
+        "email": recipient_email or "",
         "location_key": location_key or "",
+        "location key": location_key or "",
         "location": location or "your location",
+        "course": course or "",
+        "date": date_value or "",
         "today": datetime.now().strftime("%m/%d/%Y"),
     }
 
     default_block = templates.get("default") if isinstance(templates.get("default"), dict) else {}
     default_subject = (default_block.get("subject") or "").strip() or f"AHA Update - {context['location']}"
     default_body = (default_block.get("body") or "").strip() or (
-        f"Hello {context['first_name']},\n\n"
-        f"This is your AHA update for {context['location']}.\n"
+        "Hello {first_name},\n\n"
+        "This is your AHA update for {location}.\n"
         "Please review the required steps for your location and complete any pending items.\n\n"
         "If you have questions, reply to this email."
     )
@@ -258,15 +306,8 @@ def _compose_location_email(
     subject_template = (selected_template.get("subject") or "").strip() or default_subject
     body_template = (selected_template.get("body") or "").strip() or default_body
 
-    try:
-        subject = subject_template.format(**context)
-    except Exception:
-        subject = default_subject
-
-    try:
-        body = body_template.format(**context)
-    except Exception:
-        body = default_body
+    subject = _render_template(subject_template, context)
+    body = _render_template(body_template, context)
 
     return subject, body
 
@@ -426,11 +467,25 @@ def send_reminder_email(token: str, recipient_email: str, subject: str, body_tex
 
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=20)
+        request_id = response.headers.get("request-id", "")
+        client_request_id = response.headers.get("client-request-id", "")
+
+        print(
+            f"[REMINDER] Graph sendMail response for {recipient_email}: "
+            f"status={response.status_code}, request-id={request_id}, client-request-id={client_request_id}",
+            flush=True,
+        )
     except Exception as e:
         print(f"[REMINDER] Failed sending email to {recipient_email}: {e!r}", flush=True)
         return False
 
     if response.status_code == 202:
+        delay_seconds = float(os.getenv("REMINDER_SEND_DELAY_SECONDS", "10") or "10")
+
+        if delay_seconds > 0:
+            print(f"[REMINDER] Email accepted for {recipient_email}. Waiting {delay_seconds} seconds before next send.", flush=True)
+            time.sleep(delay_seconds)                                                                                                 # Throttle every successful Graph sendMail call
+
         return True
 
     print(
@@ -532,12 +587,44 @@ def process_due_reminder_emails(token: str, worksheet_name: str | None = None) -
             )
         else:
             due_date = baseline + timedelta(days=days_interval)
-            subject = "Acuity Registration Reminder"
-            body = (
-                f"Hello {first_name or 'there'},\n\n"
-                "Our records show your Acuity registration is still incomplete. "
-                "Please complete registration as soon as possible.\n\n"
-                f"This reminder is sent every {days_interval} day(s) until completed."
+
+            last_col = _first_present_column(
+                header_index,
+                ("Last Name", "LastName", "Last"),
+                default=0,
+            )
+
+            course_col = _first_present_column(
+                header_index,
+                ("Course",),
+                default=0,
+            )
+
+            last_name = _cell(row, last_col)
+            course_value = _cell(row, course_col)
+
+            context = _build_aha_row_context(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                course=course_value,
+                date_value=date_raw,
+            )
+
+            subject = _render_template(
+                "Acuity Registration Reminder - {course}",
+                context,
+            )
+
+            body = _render_template(
+                (
+                    os.getenv("ACUITY_NOT_REGISTERED_EMAIL_BODY_TEMPLATE", "") or
+                    "Hello {first_name},\n\n"
+                    "Our records show your Acuity registration for {course} on {date} is still incomplete.\n\n"
+                    "Please complete registration as soon as possible.\n\n"
+                    "Thank you."
+                ),
+                context,
             )
 
         if now < due_date:
@@ -548,6 +635,9 @@ def process_due_reminder_emails(token: str, worksheet_name: str | None = None) -
             try:
                 _safe_update_cell(ws, row_idx, reminder_col, today_str)
                 stats["sent"] += 1
+
+                if stats["sent"] >= REMINDER_MAX_EMAILS_PER_RUN:
+                    return stats                                                                                                      # Stop this cycle after configured batch limit
             except Exception as e:
                 stats["errors"] += 1
                 print(f"[REMINDER] Sent email but failed updating sheet for {email}: {e!r}", flush=True)
@@ -621,146 +711,233 @@ def check_and_populate_reminder_emails(worksheet_name: str | None = None) -> int
         print(f"[REMINDER] Error in check_and_populate_reminder_emails: {e!r}", flush=True)
         return 0
 
+def sync_aha_acuity_from_rqi_sheet() -> int:
+    """Flip AHA Acuity Regristration from No to Yes when the person exists in the RQI sheet."""
+    synced_count = 0
+
+    try:
+        rqi_ws = _get_rqi_gsheet_worksheet()
+        rqi_values = rqi_ws.get_all_values()
+
+        if not rqi_values:
+            return 0
+
+        rqi_headers = rqi_values[0]
+        rqi_header_index = {_normalize_header(h): idx + 1 for idx, h in enumerate(rqi_headers)}
+
+        email_col = _first_present_column(rqi_header_index, ("Email", "Email Address", "UserID"), default=0)
+        first_col = _first_present_column(rqi_header_index, ("FirstName", "First Name", "First"), default=0)
+        last_col = _first_present_column(rqi_header_index, ("LastName", "Last Name", "Last"), default=0)
+        date_col = _first_present_column(rqi_header_index, ("HireDate", "Hire Date", "Date", "ActiveDate", "Active Date"), default=0)
+
+        if email_col == 0:
+            print("[AHA-SYNC] RQI sheet missing Email/UserID column.", flush=True)
+            return 0
+
+        for row_idx, row in enumerate(rqi_values, start=1):
+            if row_idx == 1 or not row:
+                continue
+
+            email = _cell(row, email_col)
+            if not email or "@" not in email:
+                continue
+
+            updated = update_aha_registration_status(
+                email=email,
+                registration_date=_cell(row, date_col),
+                first_name=_cell(row, first_col),
+                last_name=_cell(row, last_col),
+            )
+
+            if updated:
+                synced_count += 1
+
+        if synced_count:
+            print(f"[AHA-SYNC] Updated {synced_count} AHA row(s) from RQI sheet.", flush=True)
+
+        return synced_count
+
+    except Exception as e:
+        print(f"[AHA-SYNC] Failed syncing AHA from RQI sheet: {e!r}", flush=True)
+        return 0
 
 def process_aha_location_emails(token: str, worksheet_name: str | None = None) -> Dict[str, int]:
-    """Scan RQI sheet and send one location-tied email per person when unsent.
-
-    Behavior:
-    - Reads the RQI worksheet (configured by WORKSHEET_NAME or provided override).
-    - Uses recipient Email and LocationName from the same row.
-    - Sends only after the same email appears in AHA registration sheet with AHA Registration = yes.
-    - Validates/translates row location through the location key store before sending.
-    - Sends email content tied to the resolved location.
-    - Tracks sent rows in a local hashed tracker file to prevent duplicates.
-    - Optionally writes send date to "Location Email Sent" only when explicitly enabled.
-    """
+    """Send next-day location reminders driven by the AHA sheet."""
     stats = {"sent": 0, "considered": 0, "errors": 0, "skipped": 0, "invalid_location": 0}
+
     if not token:
         return stats
 
     if not _is_aha_location_email_enabled():
         return stats
 
-    target_worksheet = worksheet_name or (os.getenv("WORKSHEET_NAME") or "Leads").strip() or None
-    ws = _get_rqi_gsheet_worksheet(target_worksheet)
-    all_values = ws.get_all_values()
-    if not all_values:
+    sync_aha_acuity_from_rqi_sheet()                                                                                                  # Ensure AHA Acuity Regristration is updated before checking next-day reminders
+
+    aha_ws = _get_gsheet_worksheet(worksheet_name)
+    aha_values = aha_ws.get_all_values()
+
+    if not aha_values:
         return stats
 
-    headers = all_values[0]
-    header_index = {_normalize_header(h): idx + 1 for idx, h in enumerate(headers)}
+    aha_headers = aha_values[0]
+    aha_header_index = {_normalize_header(h): idx + 1 for idx, h in enumerate(aha_headers)}
 
-    email_col = _first_present_column(header_index, ("Email", "Email Address", "UserID"), default=1)
-    first_col = _first_present_column(header_index, ("First Name", "FirstName", "First"), default=0)
-    last_col = _first_present_column(header_index, ("Last Name", "LastName", "Last"), default=0)
-    cycle_col = _first_present_column(
-        header_index,
-        ("Date", "HireDate", "Hire Date", "ActiveDate", "Active Date", "RegistrationDate", "Registration Date"),
+    aha_email_col = _first_present_column(aha_header_index, ("Email", "Email Address"), default=1)
+    aha_first_col = _first_present_column(aha_header_index, ("First Name", "FirstName", "First"), default=0)
+    aha_last_col = _first_present_column(aha_header_index, ("Last Name", "LastName", "Last"), default=0)
+    aha_course_col = _first_present_column(aha_header_index, ("Course",), default=0)
+    aha_date_col = _first_present_column(aha_header_index, ("Date",), default=0)
+    acuity_col = _first_present_column(
+        aha_header_index,
+        ("Acuity Regristration", "Acuity Registration", "AcuityRegistered", "Acuity Status"),
         default=0,
     )
-    location_col = _first_present_column(
-        header_index,
-        ("LocationName", "Location Name", "Location", "Site", "Facility", "Campus"),
-        default=0,
-    )
-    enabled_col = _first_present_column(
-        header_index,
-        ("Location Email Enabled", "Auto Email", "Send Location Email", "Email Enabled"),
-        default=0,
-    )
-    sent_col = _first_present_column(
-        header_index,
-        ("Location Email Sent", "LocationEmailSent"),
-        default=0,
-    )
+    reminder_col = _first_present_column(aha_header_index, ("Reminder Email", "ReminderEmail"), default=0)
 
-    if location_col == 0:
-        print("[RQI-LOCATION-EMAIL] Missing LocationName column in RQI sheet.", flush=True)
+    if aha_email_col == 0 or aha_date_col == 0 or acuity_col == 0 or reminder_col == 0:
+        print("[AHA-LOCATION-EMAIL] Missing required AHA sheet columns.", flush=True)
         stats["errors"] += 1
         return stats
 
+    rqi_ws = _get_rqi_gsheet_worksheet()
+    rqi_values = rqi_ws.get_all_values()
+
+    if not rqi_values:
+        return stats
+
+    rqi_headers = rqi_values[0]
+    rqi_header_index = {_normalize_header(h): idx + 1 for idx, h in enumerate(rqi_headers)}
+
+    rqi_email_col = _first_present_column(rqi_header_index, ("Email", "Email Address", "UserID"), default=0)
+    rqi_location_col = _first_present_column(
+        rqi_header_index,
+        ("LocationName", "Location Name", "Location", "Site", "Facility", "Campus"),
+        default=0,
+    )
+
+    if rqi_email_col == 0 or rqi_location_col == 0:
+        print("[AHA-LOCATION-EMAIL] Missing Email or LocationName column in RQI sheet.", flush=True)
+        stats["errors"] += 1
+        return stats
+
+    rqi_by_email: Dict[str, list[str]] = {}
+
+    for rqi_row_idx, rqi_row in enumerate(rqi_values, start=1):
+        if rqi_row_idx == 1 or not rqi_row:
+            continue
+
+        rqi_email = _cell(rqi_row, rqi_email_col).lower()
+
+        if rqi_email and "@" in rqi_email:
+            rqi_by_email[rqi_email] = rqi_row
+
     location_pairs = load_location_keys()
+
     if not location_pairs:
-        print("[RQI-LOCATION-EMAIL] No location keys configured. Add keys in the GUI Location Keys tab.", flush=True)
+        print("[AHA-LOCATION-EMAIL] No location keys configured. Add keys in the GUI Location Keys tab.", flush=True)
         stats["errors"] += 1
         return stats
 
     templates = _load_location_email_templates()
     tracked_ids = load_tracker_hashes()
-    aha_registered_emails = _load_aha_registered_emails()
-    if not aha_registered_emails:
-        print("[RQI-LOCATION-EMAIL] No AHA-registered emails found; location emails are deferred.", flush=True)
-        return stats
-
-    writeback_enabled = _writeback_to_rqi_enabled()
+    today = datetime.now().date()
+    tomorrow = today + timedelta(days=1)
     today_str = datetime.now().strftime("%m/%d/%Y")
 
-    for row_idx, row in enumerate(all_values, start=1):
-        if row_idx == 1 or not row:
+    for aha_row_idx, aha_row in enumerate(aha_values, start=1):
+        if aha_row_idx == 1 or not aha_row:
             continue
 
-        email = _cell(row, email_col)
-        raw_location = _cell(row, location_col)
-        sent_marker = _cell(row, sent_col)
+        email = _cell(aha_row, aha_email_col)
         email_lower = email.lower()
 
         if not email or "@" not in email:
             stats["skipped"] += 1
             continue
 
+        acuity_value = _cell(aha_row, acuity_col)
+        if not _is_truthy_yes(acuity_value):
+            stats["skipped"] += 1
+            continue
+
+        course_date_raw = _cell(aha_row, aha_date_col)
+        course_date = _parse_sheet_date(course_date_raw)
+
+        if not course_date or course_date.date() != tomorrow:
+            stats["skipped"] += 1
+            continue
+
+        reminder_raw = _cell(aha_row, reminder_col)
+        reminder_date = _parse_sheet_date(reminder_raw)
+
+        if reminder_date and reminder_date.date() == today:
+            stats["skipped"] += 1
+            continue
+
+        rqi_row = rqi_by_email.get(email_lower)
+
+        if not rqi_row:
+            stats["skipped"] += 1
+            print(f"[AHA-LOCATION-EMAIL] No matching RQI row found for {email}.", flush=True)
+            continue
+
+        raw_location = _cell(rqi_row, rqi_location_col)
+
         if not raw_location:
-            stats["skipped"] += 1
-            continue
-
-        # Send only after person is present in AHA registration sheet with AHA Registration = yes.
-        if email_lower not in aha_registered_emails:
-            stats["skipped"] += 1
-            continue
-
-        if enabled_col > 0 and not _truthy(_cell(row, enabled_col)):
-            stats["skipped"] += 1
+            stats["invalid_location"] += 1
+            stats["errors"] += 1
+            print(f"[AHA-LOCATION-EMAIL] Matching RQI row has no LocationName for {email}.", flush=True)
             continue
 
         location = _resolve_location_from_key_store(raw_location, location_pairs)
+
         if not location:
             stats["invalid_location"] += 1
             stats["errors"] += 1
             print(
-                f"[RQI-LOCATION-EMAIL] Row {row_idx} skipped: location {raw_location!r} not found in location key store.",
+                f"[AHA-LOCATION-EMAIL] Location {raw_location!r} for {email} was not found in location key store.",
                 flush=True,
             )
             continue
 
-        first_name = _cell(row, first_col)
-        last_name = _cell(row, last_col)
-        cycle_marker = _cell(row, cycle_col)
         location_key = _location_key_for_row(raw_location, location, location_pairs)
 
-        dedupe_id = _tracking_id(email, location, cycle_marker)
+        first_name = _cell(aha_row, aha_first_col)
+        last_name = _cell(aha_row, aha_last_col)
+        course_value = _cell(aha_row, aha_course_col)
+
+        dedupe_id = _tracking_id(email, location, course_date_raw)
+
         if dedupe_id in tracked_ids:
             stats["skipped"] += 1
             continue
 
-        # Backward-compatible skip if a sheet marker already exists.
-        if sent_col > 0 and sent_marker:
-            tracked_ids.add(dedupe_id)
-            stats["skipped"] += 1
-            continue
-
-        subject, body = _compose_location_email(first_name, last_name, email, location, location_key, templates)
+        subject, body = _compose_location_email(
+            first_name,
+            last_name,
+            email,
+            location,
+            location_key,
+            templates,
+            course=course_value,
+            date_value=course_date_raw,
+        )
 
         stats["considered"] += 1
+
         if send_reminder_email(token, email, subject, body):
             try:
                 append_tracker_hash(dedupe_id)
                 tracked_ids.add(dedupe_id)
-
-                if writeback_enabled and sent_col > 0:
-                    _safe_update_cell(ws, row_idx, sent_col, today_str)
+                _safe_update_cell(aha_ws, aha_row_idx, reminder_col, today_str)
                 stats["sent"] += 1
+
+                if stats["sent"] >= REMINDER_MAX_EMAILS_PER_RUN:
+                    return stats
+
             except Exception as e:
                 stats["errors"] += 1
-                print(f"[RQI-LOCATION-EMAIL] Sent but failed to persist tracking row={row_idx} email={email}: {e!r}", flush=True)
+                print(f"[AHA-LOCATION-EMAIL] Sent but failed to persist tracking/update sheet for {email}: {e!r}", flush=True)
         else:
             stats["errors"] += 1
 
