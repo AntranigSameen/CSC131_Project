@@ -3522,8 +3522,21 @@ class SettingsWindow(QMainWindow):
 
         self._refresh_dashboard_metric_cards()                                                                                        # Refresh Registered/Enrolled cards using current today/total mode
 
-        self.errors_card.set_value("0")                                                                                               # Error counting will be connected in the next stage
-        self.errors_card.set_color("#e64e30")                                                                                       # Red for errors
+        error_count = 0
+
+        try:
+            app_log_path = log_file()
+
+            if os.path.exists(app_log_path):
+                with open(app_log_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if " - ERROR - " in line or "ERROR:" in line:
+                            error_count += 1
+        except Exception:
+            error_count = 0
+
+        self.errors_card.set_value(str(error_count))
+        self.errors_card.set_color("#00bc8c" if error_count == 0 else "#e64e30")
 
         queue_file = os.path.join(base_dir(), "queue_status.txt")                                                                     # Queue status file written by master_control
         if os.path.exists(queue_file):

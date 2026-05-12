@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 """Acuity-to-AHA registration sync helpers.
 
-This module updates only the "Acuity Registration/Regristration" flag on the
+This module updates only the "Acuity Registration/Registration" flag on the
 AHA registration sheet after an RQI row is successfully appended.
 """
 
@@ -188,7 +188,7 @@ def update_aha_registration_status(
 ):
     """
     After RQI row append, find matching person in AHA sheet and flip only
-    Acuity Registration/Regristration from No -> Yes.
+    Acuity Registration/Registration from No -> Yes.
     Matching is name-only (first + last). Email is intentionally ignored.
     
     Args:
@@ -285,7 +285,7 @@ def update_aha_registration_status(
         if current_acuity == "no":
             # Only this column is updated; all other columns are left untouched.
             _update_cell_raw(ws, row_idx, acuity_col, "Yes")
-            logging.info("AHA sync flipped row %s Acuity Regristration from No to Yes", row_idx)
+            logging.info("AHA sync flipped row %s Acuity Registration from No to Yes", row_idx)
             return True
 
         logging.debug("AHA sync found match but no flip needed on row %s", row_idx)

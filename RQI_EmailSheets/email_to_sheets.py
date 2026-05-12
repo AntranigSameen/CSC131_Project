@@ -321,6 +321,8 @@ def _ensure_sftp_directory(sftp, remote_path: str) -> None:
 def upload_csv_to_sftp(csv_path: Path, mark_uploaded: bool = True) -> str:
     global _last_uploaded_local_path, _last_uploaded_remote_path, _last_upload_time, _last_upload_error
     
+    load_dotenv(env_file(), override=True)                                                                                           # Reload latest SFTP settings from GUI before attempting upload
+
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV file does not exist: {csv_path}")                                                              # Stop immediately when local file path is invalid
 

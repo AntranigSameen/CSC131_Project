@@ -380,7 +380,7 @@ def _load_aha_registered_emails() -> set[str]:
     email_col = _first_present_column(header_index, ("Email", "Email Address", "UserID"), default=0)
     aha_col = _first_present_column(
         header_index,
-        ("AHA Registration", "AHARegistered", "AHA Status", "AHA Regristration", "AHA Regristration Status"),
+        ("AHA Registration", "AHARegistered", "AHA Status", "AHA Registration", "AHA Registration Status"),
         default=0,
     )
 
@@ -546,7 +546,7 @@ def process_due_reminder_emails(token: str, worksheet_name: str | None = None) -
 
     now = datetime.now()
     today_str = now.strftime("%m/%d/%Y")
-    stats = {"sent": 0, "considered": 0, "errors": 0}
+    stats = {"sent": 0, "considered": 0, "errors": 0, "skipped": 0}
 
     for row_idx, row in enumerate(all_values, start=1):
         if row_idx == 1 or not row:
@@ -572,22 +572,19 @@ def process_due_reminder_emails(token: str, worksheet_name: str | None = None) -
         if acuity_registered and paid_complete and aha_registered:
             continue
 
-        baseline = _parse_sheet_date(reminder_raw) or _parse_sheet_date(date_raw)
-        if baseline is None:
-            continue
+        reminder_date = _parse_sheet_date(reminder_raw)
+
+        if reminder_raw and reminder_date is None:
+            stats["skipped"] += 1
+            continue                                                                                                                  # Skip invalid reminder dates instead of sending repeatedly
+
+        reminder_is_due = reminder_date is None or now >= reminder_date + timedelta(days=days_interval)
 
         if acuity_registered:
-            due_date = _add_years(baseline, years_interval)
-            subject = "Acuity Registration Renewal Reminder"
-            body = (
-                f"Hello {first_name or 'there'},\n\n"
-                f"This is a reminder that your Acuity registration is active. "
-                f"Please review and renew any required registration steps.\n\n"
-                f"This reminder is sent every {years_interval} year(s)."
-            )
-        else:
-            due_date = baseline + timedelta(days=days_interval)
+            stats["skipped"] += 1
+            continue                                                                                                                  # Registered users are handled by process_aha_location_emails()
 
+        else:
             last_col = _first_present_column(
                 header_index,
                 ("Last Name", "LastName", "Last"),
@@ -627,7 +624,8 @@ def process_due_reminder_emails(token: str, worksheet_name: str | None = None) -
                 context,
             )
 
-        if now < due_date:
+        if not acuity_registered and not reminder_is_due:
+            stats["skipped"] += 1
             continue
 
         stats["considered"] += 1
@@ -712,7 +710,7 @@ def check_and_populate_reminder_emails(worksheet_name: str | None = None) -> int
         return 0
 
 def sync_aha_acuity_from_rqi_sheet() -> int:
-    """Flip AHA Acuity Regristration from No to Yes when the person exists in the RQI sheet."""
+    """Flip AHA Acuity Registration from No to Yes when the person exists in the RQI sheet."""
     synced_count = 0
 
     try:
@@ -771,7 +769,7 @@ def process_aha_location_emails(token: str, worksheet_name: str | None = None) -
     if not _is_aha_location_email_enabled():
         return stats
 
-    sync_aha_acuity_from_rqi_sheet()                                                                                                  # Ensure AHA Acuity Regristration is updated before checking next-day reminders
+    sync_aha_acuity_from_rqi_sheet()                                                                                                  # Ensure AHA Acuity Registration is updated before checking next-day reminders
 
     aha_ws = _get_gsheet_worksheet(worksheet_name)
     aha_values = aha_ws.get_all_values()
@@ -789,7 +787,7 @@ def process_aha_location_emails(token: str, worksheet_name: str | None = None) -
     aha_date_col = _first_present_column(aha_header_index, ("Date",), default=0)
     acuity_col = _first_present_column(
         aha_header_index,
-        ("Acuity Regristration", "Acuity Registration", "AcuityRegistered", "Acuity Status"),
+        ("Acuity Registration", "Acuity Registration", "AcuityRegistered", "Acuity Status"),
         default=0,
     )
     reminder_col = _first_present_column(aha_header_index, ("Reminder Email", "ReminderEmail"), default=0)
