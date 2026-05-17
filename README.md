@@ -51,6 +51,7 @@ python -m playwright install chromium
 ### Configuration
 
 #### 1. Google Sheets Setup
+**Note:** Google sheets will be provided for grading.
 1. Download your Google Service Account JSON key file
 2. Place it in the project root as `google_sheet_api_key.json`
 3. Share your Google Sheet with the service account email (found in the JSON under `client_email`)
