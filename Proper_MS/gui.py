@@ -62,7 +62,7 @@ RESTART_REQUIRED = {                                                            
     "SENDER_EMAIL_RQI",                                                                                                               #
     "RQI_CSV_BATCH_MINUTES"                                                                                                           #
     "ACUITY_NOT_REGISTERED_REMINDER_DAYS"                                                                                             #
-    "ACUITY_REGISTERED_REMINDER_YEARS"                                                                                                #
+    "ACUITY_REGISTERED_REMINDER_MONTHS"                                                                                               #
 }                                                                                                                                     # Settings that require restart after change
 
 # =====================
@@ -2363,13 +2363,13 @@ class SettingsWindow(QMainWindow):
         self.entries["ACUITY_NOT_REGISTERED_REMINDER_DAYS"] = not_registered_days                                                     # Save reminder timing for non-registered Acuity users into .env
         form.addRow("Reminder For Acuity Not Registered Yet (Days)", not_registered_days)
 
-        # Reminder cadence for registered Acuity users (y years)
-        registered_years = QSpinBox()
-        registered_years.setMinimum(1)
-        registered_years.setMaximum(25)
-        registered_years.setValue(int(os.getenv("ACUITY_REGISTERED_REMINDER_YEARS", "1")))
-        self.entries["ACUITY_REGISTERED_REMINDER_YEARS"] = registered_years                                                           # Save reminder timing for registered Acuity users into .env
-        form.addRow("Reminder For Acuity Registered Users (Years)", registered_years)
+        # Reminder cadence for registered Acuity users (months)
+        registered_months = QSpinBox()
+        registered_months.setMinimum(1)
+        registered_months.setMaximum(300)
+        registered_months.setValue(int(os.getenv("ACUITY_REGISTERED_REMINDER_MONTHS", "12")))
+        self.entries["ACUITY_REGISTERED_REMINDER_MONTHS"] = registered_months                                                         # Save reminder timing for registered Acuity users into .env
+        form.addRow("Reminder For Acuity Registered Users (Months)", registered_months)
 
         layout.addLayout(form)
 

@@ -3,7 +3,7 @@
 # ============================================================================
 # This module handles automated reminder emails for Acuity registration.
 # Sends personalized reminders based on registration status and configured
-# cadence (days for non-registered, years for registered students).
+# cadence (days for non-registered, months for registered students).
 # ============================================================================
 
 import os
@@ -89,6 +89,15 @@ def _add_years(start: datetime, years: int) -> datetime:
     except ValueError:
         # Handle Feb 29 on non-leap years
         return start.replace(month=2, day=28, year=start.year + years)
+
+
+def _add_months(start: datetime, months: int) -> datetime:
+    """Add months to a datetime, handling month-end edge cases."""
+    month = start.month - 1 + months
+    year = start.year + month // 12
+    month = month % 12 + 1
+    day = min(start.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
+    return start.replace(year=year, month=month, day=day)
 
 
 def _is_truthy_yes(value: str) -> bool:
@@ -505,7 +514,7 @@ def process_due_reminder_emails(token: str, worksheet_name: str | None = None) -
 
     Cadence is environment-driven:
     - ACUITY_NOT_REGISTERED_REMINDER_DAYS: for Acuity Registration != Yes
-    - ACUITY_REGISTERED_REMINDER_YEARS: for Acuity Registration == Yes
+    - ACUITY_REGISTERED_REMINDER_MONTHS: for Acuity Registration == Yes
 
     Args:
         token: Microsoft Graph API access token
@@ -518,7 +527,7 @@ def process_due_reminder_emails(token: str, worksheet_name: str | None = None) -
         return {"sent": 0, "considered": 0, "errors": 0}
 
     days_interval = _positive_int_env("ACUITY_NOT_REGISTERED_REMINDER_DAYS", REMINDER_EMAIL_DAYS)
-    years_interval = _positive_int_env("ACUITY_REGISTERED_REMINDER_YEARS", 1)
+    months_interval = _positive_int_env("ACUITY_REGISTERED_REMINDER_MONTHS", 12)
 
     ws = _get_gsheet_worksheet(worksheet_name)
     all_values = ws.get_all_values()
