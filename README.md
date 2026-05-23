@@ -1,326 +1,394 @@
 # CSC131 Automation Project
 
-## Overview
+## Project Overview
 
-This is an automated system designed to streamline the management of RQI (Resuscitation Quality Improvement) training programs and AHA (American Heart Association) certification registrations. The application automates email processing, student registration, Google Sheets integration, and reminder notifications through a user-friendly GUI interface.
+This is an automated system developed for streamlining RQI (Resuscitation Quality Improvement) training programs and AHA (American Heart Association) certification registrations. The application monitors Microsoft Outlook emails for student registration requests, automatically processes the data, registers students on the AHA portal using browser automation, updates Google Sheets in real-time, and sends confirmation and reminder emails using location-specific templates.
 
-## Key Features
+The system features a modern PySide6 GUI with system tray integration, allowing users to monitor automation status, view live logs, manually send emails, and manage multiple training locations. Background services handle periodic tasks like Acuity registration status synchronization and reminder email scheduling. All operations are logged with detailed tracking and screenshot capture for troubleshooting.
 
-### 📧 Email Automation
-- **Automated Email Processing**: Monitors Microsoft Outlook inbox for student registration requests
-- **Email-to-Sheets Integration**: Automatically extracts employee information (LocationID, Name, Email, HireDate) from emails and appends to Google Sheets
-- **Template-Based Responses**: Location-specific email templates for automated communications
-- **Reminder System**: Automatically sends reminder emails to students after configurable periods (default: 7 days)
-- **Manual Email Handling**: GUI interface for sending custom emails when needed
+## Installation & Setup
 
-### 📝 Registration Management
-- **AHA Registration Automation**: Automatically registers students for AHA training courses using Playwright browser automation
-- **Acuity Integration**: Manages training schedules and appointments
-- **Course Availability Checking**: Validates available training slots before registration
-- **Registration Tracking**: Maintains detailed logs of all registration attempts and outcomes
-
-### 📊 Data Management
-- **Google Sheets Integration**: Real-time synchronization with Google Sheets for student data
-- **CSV Export**: Generate and upload CSV reports for tracking and analysis
-- **Location-Based Tracking**: Separate tracking for different training locations
-- **SFTP Upload**: Automated file transfer capabilities for data sharing
-
-### 🖥️ User Interface
-- **Modern GUI**: PySide6-based graphical interface for easy operation
-- **System Tray Integration**: Runs minimized in system tray for background operation
-- **Settings Management**: Comprehensive settings panel for configuration without editing files
-- **Real-time Logs**: Live log viewer to monitor automation activities
-- **Multi-Location Support**: Manage multiple training locations with unique configurations
-
-## Prerequisites
-
-Before installing this project, ensure you have:
+### Prerequisites
 
 - **Python 3.8+** installed on your system
-- **Microsoft Azure AD Application** with appropriate permissions for:
-  - Microsoft Graph API (Mail.Read, Mail.Send, Calendar.ReadWrite)
-  - Proper Client ID and Tenant ID configured
-- **Google Cloud Service Account** with:
-  - Google Sheets API enabled
-  - Service account JSON key file
-- **AHA Training Portal Account** with proper credentials
-- **Operating System**: Windows, macOS, or Linux
+- **Microsoft Azure AD Application** with Microsoft Graph API permissions (`Mail.Read`, `Mail.Send`, `Calendar.ReadWrite`)
+- **Google Cloud Service Account** with Google Sheets API enabled and JSON key file
+- **AHA Training Portal Account** with valid credentials
+- **Operating System**: Windows
 
-## Installation
+### Installation Steps
 
-### Automated Setup (Recommended)
+#### Option 1: Automated Setup (Recommended)
 
-#### For macOS/Linux:
-```bash
-# Navigate to the project directory
-cd CSC131_Project
-
-# Run the setup script
-chmod +x scripts/setup.sh
-./scripts/setup.sh
-```
-
-#### For Windows:
 ```powershell
-# Navigate to the project directory
 cd CSC131_Project
-
-# Run the setup script
 .\scripts\setup.ps1
 ```
 
-### Manual Setup
+The setup script will create a Python virtual environment, install all dependencies, and set up Playwright browser automation. This should run automatically whenever this project is loaded into Visual Studio Code. This script is only for Windows and will NOT work for Mac.
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd CSC131_Project
-   ```
+#### Option 2: Manual Installation
 
-2. **Create a virtual environment**:
-   ```bash
-   python -m venv .venv
-   ```
+```powershell
+# 1. Navigate to the project directory
+cd CSC131_Project
 
-3. **Activate the virtual environment**:
-   - **Windows**: `.venv\Scripts\activate`
-   - **macOS/Linux**: `source .venv/bin/activate`
+# 2. Create and activate virtual environment
+python -m venv .venv
+& .\.venv\Scripts\Activate.ps1
 
-4. **Install dependencies**:
-   ```bash
-   pip install --upgrade pip
-   pip install msal requests python-dotenv
-   pip install gspread google-auth google-auth-oauthlib google-auth-httplib2
-   pip install PySide6 playwright
-   pip install pyinstaller flask
-   python -m playwright install chromium
-   ```
+# 3. Install core dependencies
+python -m pip install --upgrade pip
+pip install msal requests python-dotenv
+pip install gspread google-auth google-auth-oauthlib google-auth-httplib2
+pip install pyinstaller
+pip install playwright
+pip install pystray pillow
+pip install ttkbootstrap
+pip install paramiko
+pip install openpyxl
+python -m playwright install
 
-## Configuration
+# 4. Install Playwright browsers
+python -m playwright install chromium
+```
 
-### 1. Google Sheets API Setup
+### Configuration
 
-1. Place your Google Service Account JSON key file in the project root directory
-2. Rename it to `google_sheet_api_key.json` or update the path in your `.env` file
-3. Share your Google Sheet with the service account email address (found in the JSON file)
+#### 1. Google Sheets Setup
+**Note:** Google sheets will be provided for grading.
 
-### 2. Microsoft Azure AD Configuration
+1. We provide a `google_sheet_api_key.json` for our testing google sheets site
+2. Located in the project root as `google_sheet_api_key.json`
+4. **Editor** access is already granted to anyone with the link. Please reach out if there are any issues.
+5. AHA sheet link: `https://docs.google.com/spreadsheets/d/143-IvGetu1Lz8InKi9lqNcJCiCziSvtD2954sgxxZRk/edit?gid=0#gid=0`
+6. RQI sheet link: `https://docs.google.com/spreadsheets/d/13_cxh-bfXh9ZCITZTaz3bsUWLLJHyHeoHpyvYB_DuFI/edit?gid=482560077#gid=482560077` `(SPREADSHEET_ID=13_cxh-bfXh9ZCITZTaz3bsUWLLJHyHeoHpyvYB_DuFI)`
 
-Create a `.env` file in the project root with the following variables:
+**Alternatively:**
+
+1. Download your Google Service Account JSON key file
+2. Place it in the project root as `google_sheet_api_key.json`
+3. Share your Google Sheet with the service account email (found in the JSON under `client_email`)
+4. Grant **Editor** access
+
+
+#### 2. Environment Variables
+**Note:** Environment variables are provided for grading. If you need to modify them or recreate the configuration, use the following format. If you want to use our env, please ask
+
+Create a `.env` file in the project root folder with the following:
 
 ```env
 # Microsoft Authentication
 CLIENT_ID=your-azure-client-id
 TENANT_ID=your-azure-tenant-id
 AUTHORITY=https://login.microsoftonline.com/your-tenant-id
-SCOPES=["https://graph.microsoft.com/.default"]
+SCOPES=Mail.ReadWrite,Mail.Send,User.Read,Calendars.ReadWrite
+CACHE_FILE=                               # Leave Empty
 
 # Google Sheets
+EMAIL_PROVIDER=outlook
 SERVICE_ACCOUNT_AHA_JSON=google_sheet_api_key.json
-GOOGLE_SHEET_URL=your-google-sheet-url
+GOOGLE_SHEET_URL=your-AHA-google-sheet-url
+WORKSHEET_NAME=RQI Data
+SERVICE_ACCOUNT_RQI_JSON=service_account.json
+SPREADSHEET_ID=your-RQI-sheet-id
+SENDER_EMAIL=source.email@example.com
+SENDER_EMAIL_RQI=source.email@example.com
 
-# AHA Portal Settings
+# APP General
+KEYWORD_NAME=Dear
+AHA_URL=https://atlas.heart.org/location
 ORG_NAME=Your Organization Name
+IS_HEADLESS=True
+APP_THEME=dark
 
 # Automation Settings
-INTERVAL=10                           # Check interval in seconds
-EMAIL_REFRESH_ON_START=1              # 1=refresh on startup, 0=skip
-FORCE_RUN=0                           # 1=always process latest, 0=normal
-PAUSE_AT_END=1                        # 1=keep browser open, 0=close
-PW_TIMEOUT_MS=10000                   # Playwright timeout in milliseconds
-ADVANCE_INDEX_ON_NO_COURSES=1         # Move to next email if no courses available
-REMINDER_EMAIL_DAYS=7                 # Days before sending reminder
+INTERVAL=60                               # Must be at least 60 seconds
+ACUITY_NOT_REGISTERED_REMINDER_DAYS=7
+REMINDER_EMAIL_DAYS=7
+ACUITY_REGISTERED_REMINDER_YEARS=1
+REMINDER_MAX_EMAILS_PER_RUN=25
+REMINDER_SEND_DELAY_SECONDS=10            # Must be at least 10 seconds
+AHA_LOCATION_EMAIL_ENABLED=True
 
-# GUI Settings
-IS_HEADLESS=0                         # 1=run browser headless, 0=show browser
+# SFTP
+RQI_CSV_EXPORT_DIR=C:\Your\CSV\Save\Path
+RQI_CSV_FILENAME=filename.csv
+RQI_CSV_BATCH_MINUTES=1
+
+RQI_SFTP_HOST=sftp.example.com
+RQI_SFTP_PORT=22
+RQI_SFTP_USERNAME=your_username
+RQI_SFTP_PASSWORD=your_password
+RQI_SFTP_REMOTE_PATH=/uploads
+RQI_SFTP_FILE_NAME=filename.csv
+RQI_SFTP_FILE_TYPE=csv
+RQI_CLEAN_CORRUPT_ROWS=1
 ```
 
-### 3. Location Configuration
+#### 3. Location Configuration
+**Note:** Location configuration files are provided for grading. The following shows the required format for deployment. All of these can be configured in the app.
 
-The application supports multiple training locations. Configuration files are automatically created:
+Create `Proper_MS/location_keys.txt` to map location IDs to names:
+```
+101=San Francisco Bay Area
+102=Los Angeles Metro
+```
 
-- **location_keys.txt**: Maps location IDs to names
-- **location_email_templates.json**: Email templates per location
-- **location_email_tracker.json**: Tracks sent emails per location
+Create `Proper_MS/location_email_templates.json` for email templates:
+```json
+{
+  "101": {
+    "subject": "Welcome to RQI Training - {{LOCATION}}",
+    "body": "Dear {{NAME}},\n\nYour training at {{LOCATION}} is confirmed...",
+    "reminder_subject": "Reminder: Complete Your Training",
+    "reminder_body": "This is a friendly reminder..."
+  }
+}
+```
 
-These can be managed through the GUI Settings panel.
-
-## Usage
+## How to Run the Project
 
 ### Starting the Application
 
-1. **Activate your virtual environment**:
-   ```bash
-   source .venv/bin/activate  # macOS/Linux
-   .venv\Scripts\activate     # Windows
+1. **Activate the virtual environment (This should happen automatically through setup.ps1 script):**
+   ```powershell
+   .venv\Scripts\activate
    ```
 
-2. **Run the main application**:
-   ```bash
-   python Proper_MS/master_control.py
+2. **Create the application:**
+**Note:** Make sure you are in the project root and `master_control.spec` exists
+   ```powershell
+   pyinstaller master_control.spec --clean
    ```
 
-3. **First-time setup**:
-   - The application will prompt for AHA portal credentials
-   - Authenticate with Microsoft when prompted
-   - Configure settings through the GUI settings panel
+The executable will be created in the `dist/Automation Machine/` folder. The `--clean` flag ensures a fresh build by removing cached files.
 
-### Main Features
+3. **Run the application:**
+   - Go into the dist folder created within the project root
+   - Go into the application folder
+   - Run the .exe that is generated through pyinstaller
 
-#### Automated Mode
-- Click **"Start Automation"** to begin monitoring emails and processing registrations
-- The system will:
-  1. Check for new registration emails
-  2. Extract student information
-  3. Register students in available AHA courses
-  4. Log to Google Sheets
-  5. Send confirmation emails
-  6. Schedule reminder emails
+4. **First-time setup:**
+   - Enter AHA portal credentials when prompted
+   - Authenticate with Microsoft Graph API (browser window will open)
+   - Configure settings through the GUI if needed
 
-#### Manual Operations
-- **Send Manual Email**: Compose and send custom emails through the GUI
-- **Manual Registration**: Manually trigger registration for specific students
-- **Generate CSV**: Export current data to CSV format
-- **Upload to SFTP**: Transfer files to configured SFTP server
+5. **Accessing config files:**
+**NOTE**: ALL SYSTEM FILES ARE STORED IN APPDATA
+   - Press `Windows + R` to open the run dialog box
+   - Type `%APPDATA%` and press enter
+   - Look for a folder named `Automation Machine`
+   - All config and data files are stored here by default
 
-#### Monitoring
-- **View Logs**: Real-time log viewer shows all automation activities
-- **Check Status**: Dashboard displays current system status and recent activities
-- **Email Tracker**: Review all sent emails organized by location
+### Using the Application
 
-## Project Structure
+**Automated Mode:**
+- The system will monitor emails, register students, update Google Sheets, and send confirmations from the moment all logins are validated
+- View live logs in the GUI and check the Dashboard for metrics
 
-```
-CSC131_Project/
-├── Proper_MS/                      # Main application package
-│   ├── master_control.py          # Main entry point and orchestration
-│   ├── gui.py                     # PySide6 GUI implementation
-│   ├── run_automation.py          # AHA registration automation
-│   ├── read_emails.py             # Email monitoring and parsing
-│   ├── reminder_emailer.py        # Automated reminder system
-│   ├── outlook_authentication.py  # Microsoft OAuth2 handling
-│   ├── location_keys.py           # Location management
-│   ├── location_email_templates.py# Email template management
-│   ├── location_email_tracker.py  # Email tracking system
-│   ├── store_data.py              # Data persistence
-│   ├── utils.py                   # Utility functions
-│   └── ...                        # Additional modules
-├── RQI_EmailSheets/               # Email to Sheets integration
-│   └── email_to_sheets.py         # Email extraction and Sheets API
-├── scripts/                       # Setup scripts
-│   ├── setup.sh                   # macOS/Linux setup
-│   └── setup.ps1                  # Windows setup
-├── google_sheet_api_key.json      # Google service account key (not in git)
-├── .env                           # Environment configuration (not in git)
-└── README.md                      # This file
-```
+**Manual Operations:**
+- **Pause All Automation**: Click on the pause button to stop all email automation
+- **Send Manual Email**: Compose and send emails with template variables
+- **CSV Export**: Generate and optionally upload data to SFTP server
 
-## Key Components Explained
+### Accessing the Application
 
-### Master Control (`master_control.py`)
-The main orchestration script that:
-- Initializes all subsystems
-- Manages the automation loop
-- Coordinates between email processing, registration, and notifications
-- Handles GUI initialization and system tray integration
+- **GUI**: Main window opens automatically when you run `master_control.py`
+- **System Tray**: Icon appears in system tray for minimized operation
+- **Logs**: View real-time logs in the "Logs" tab of the GUI
+- **Dashboard**: Monitor metrics and activity in the "Dashboard" tab
 
-### GUI (`gui.py`)
-Provides a comprehensive interface for:
-- Starting/stopping automation
-- Configuring settings without editing files
-- Viewing real-time logs
-- Managing location templates and keys
-- Sending manual emails
+## Demo Instructions
 
-### Registration Automation (`run_automation.py`)
-Uses Playwright to:
-- Log into the AHA training portal
-- Search for available courses
-- Fill registration forms
-- Handle course availability issues
-- Capture screenshots for debugging
+After completing installation and building the application, all testing and demonstration can be performed directly through the application's GUI interface. Use the built-in features to test email processing, registration automation, and other functionality.
 
-### Email Processing (`read_emails.py`, `email_to_sheets.py`)
-- Connects to Microsoft Graph API
-- Filters unread emails matching criteria
-- Extracts structured data using regex patterns
-- Updates Google Sheets with new entries
-- Marks emails as read after processing
+### Steps to replicate demo:
+   - After running the app, Log in using your AHA credentials on the popup
+   - Authorize the app on Microsoft Graph the use of the app through the browser popup (ONLY WORKS FOR ORGANIZATION EMAILS NOT PERSONAL ONES)
+   - Configure settings for SFTP, CSV (recommended 5 minute batch time for testing), Sender Emails, Timers through the GUI (if not already done through env)
+   - Sign up for a class through the AHA website
+   - Send an email to the outlook account, the app is connected to, using the client's student registration email format. Make sure the instructor name and date of class match the class that you signed up for
+   - Wait `INTERVAL` seconds (default is `60`) for the app to run a cycle, accept the student, and add them to the AHA google sheet
+   - Send an email to the outlook account, the app is connected to, using the client's RQI payment confirmation email template. It does not matter which one.
+   - After the automation cycle runs again, the RQI sheet will update a new row with the student information. The student will also be added to the csv for that batch window
+   - Check the csv through the `CSV Viewer tab`. Press `Refresh CSVs`, then `Select CSV` --> choose the file, Press `Load CSV`. The new student will show up in the CSV
+   - Press the `Upload to SFTP Now` button and check through winscp
+   - Check the calendar on the Microsoft account to make sure a calendar event was also made for the class date and time that the RQI email defined
+   - In the `Locations` tab add a new `Key` and `Location`.
+   - Add a new email template for your new location in the `Location template` tab and save it
+   - In the `Reminder Emails` tab go to the `Manual Emailer`
+   - Send an email to the same outlook account the app is connected to (In our testing we found our emails get sent but don't get received because our account is too new/scam-like). However, if you send the email to the same account, it works. It will work perfectly for the client as he has a well established account. When you send the email make sure you use the new template you created for testing
+   - Closing the app with the "x" button in the top right corner will **NOT** close the app. It lives in the system tray and runs indefinitely. Close the app with the `Quit` button
 
-### Reminder System (`reminder_emailer.py`)
-- Tracks registration dates
-- Calculates due dates for reminders
-- Sends automated follow-up emails
-- Manages location-specific reminder templates
+## Known Issues & Limitations
 
-## Troubleshooting
+This section documents known limitations and issues that users should be aware of when using the automation system.
 
-### Common Issues
+### Current Limitations
 
-**Authentication Errors**
-- Verify your Azure AD Client ID and Tenant ID are correct
-- Ensure proper API permissions are granted in Azure Portal
-- Delete cached tokens and re-authenticate
+#### Platform & Deployment
 
-**Google Sheets Not Updating**
-- Confirm service account has edit access to the sheet
-- Check that the sheet URL in `.env` is correct
-- Verify the service account JSON file path
+**Operating System Compatibility**
+- ✅ **Windows**: Fully tested and supported
+- 🔴 **macOS/Linux**: Not supported - application is designed for Windows only
 
-**Browser Automation Fails**
-- Ensure Playwright browsers are installed: `python -m playwright install`
-- Check if AHA portal structure has changed
-- Review screenshots in the `shots/` folder for debugging
+**Resource Requirements**
+- Requires stable internet connection for API calls (Microsoft Graph, Google Sheets, AHA portal)
+- Minimum 4GB RAM recommended when browser automation is running
+- Approximately 1000MB disk space for dependencies and logs
+- Browser automation requires Chromium (~150MB after Playwright install)
 
-**No Emails Being Processed**
-- Verify Outlook permissions are granted
-- Check email filter criteria in settings
-- Ensure emails are unread and in the correct folder
+#### API & Service Limitations
 
-## Building Executables
+**Microsoft Graph API**
+- ⚠️ **Rate Limits**: Subject to Microsoft's throttling policies (typically not an issue with normal usage)
+- ⚠️ **Authentication Token Expiry**: Tokens expire after 1 hour; refresh handled automatically but may fail if offline
+- ⚠️ **Shared Mailboxes**: Not tested with shared mailboxes, may require additional permissions
+- 🔴 **Email Format Dependency**: Relies on specific email format; unstructured emails may not parse correctly
 
-To create a standalone executable:
+**Google Sheets API**
+- ⚠️ **Rate Limits**: 300 requests per minute per project (100 requests per minute per user)
+- ⚠️ **Cell Count Limit**: Google Sheets has max 5 million cells per spreadsheet
+- ⚠️ **Concurrent Access**: Race conditions inevitable if multiple instances modify same sheet simultaneously
 
-```bash
-# Activate virtual environment first
-pyinstaller master_control.spec
-```
+**AHA Portal Browser Automation**
+- ⚠️ **Course Availability**: Cannot register if no courses available; requires manual intervention
+- ⚠️ **Session Expiry**: Long-running browser sessions may expire; refresh handled automatically but may fail if offline; requires restart
 
-The executable will be created in the `dist/` folder.
+#### Feature-Specific Limitations
 
-## Security Notes
+**Email Processing**
+- 🔴 **Single Sender Only**: Only monitors emails from one sender address for each email type (`SENDER_EMAIL`, `SENDER_EMAIL_RQI`)
+- ⚠️ **Inbox Folder Only**: Does not check subfolders, sent items, or other folders
+- ⚠️ **Email Format**: Requires structured format with specific keywords (LocationID, Name, Email, `KEYWORD=Dear`)
+- 🔴 **No Attachments**: Does not process email attachments
+- ⚠️ **Plain Text**: Designed for plain text
 
-⚠️ **Important**: Never commit sensitive files to version control:
-- `.env` file (contains credentials)
-- `google_sheet_api_key.json` (service account credentials)
-- `aha_auth.json` (saved login state)
-- Any files containing passwords or tokens
+**Registration & Acuity Integration**
+- 🔴 **No Partial Matches**: Middle names, nicknames, or spelling variations will not be automatically matched
+- 🔴 **No Undo**: Manual flip operations are permanent; no rollback mechanism
 
-Add these to your `.gitignore` file.
+**Reminder System**
+- ⚠️ **No Retry Logic**: Failed reminder emails are logged but not automatically retried
+- ⚠️ **Timezone**: All dates use system timezone; no multi-timezone support
 
-## Contributing
+**Data Export & SFTP**
+- ⚠️ **Password Authentication Only**: SFTP uses password authentication; SSH key auth not implemented
+- 🔴 **No Resume**: Large file uploads that fail midway cannot resume
+- ⚠️ **Single Server**: Only supports one SFTP destination
+- 🔴 **No Encryption at Rest**: Generated CSV files stored in plaintext
 
-This project was developed as part of CSC131 (Software Engineering). For contributions:
-1. Create a feature branch
-2. Make your changes
-3. Test thoroughly
-4. Submit a pull request with detailed description
+### Known Bugs & Workarounds
 
-## Support
+#### High Priority
 
-For issues or questions:
-1. Check the troubleshooting section above
-2. Review log files in the application
-3. Check console output for error messages
-4. Contact the development team
+**Issue: Google Sheets API "Quota Exceeded" Error**
+- **Symptoms**: Error message about quota limits when processing many emails rapidly
+- **Cause**: Google Sheets API rate limiting (100 requests/min per user)
+- **Workaround**: Increase `INTERVAL` to slow down processing, or batch sheet updates
 
-## License
+#### Medium Priority
 
-[Specify your license here]
+**Issue: AHA Registration Status Not Updated After Manual Portal Changes**
+- **Symptoms**: Student manually registered on portal, but automation doesn't detect this and will not add student to sheet
+- **Cause**: System only tracks registrations it performs; no portal scraping implemented
+- **Status**: ⚠️ By design (would require additional portal scraping)
+
+#### Low Priority
+
+**Issue: Log Files Grow Large Over Time**
+- **Symptoms**: Log files in `logs/` directory consume significant disk space after weeks of use
+- **Cause**: No automatic log rotation implemented
+- **Workaround**: Manually delete or archive old log files periodically
+- **Status**: ⚠️ Planned enhancement (log rotation) for future version
+
+**Issue: Dashboard Metrics Don't Persist After Application Restart**
+- **Symptoms**: "Registered Today" counter resets to 0 when app restarts
+- **Cause**: Metrics stored in memory only, not persisted to disk
+- **Workaround**: None; this is by design for daily tracking
+- **Status**: 🔵 Feature request (optional persistence)
+
+**Issue: GUI Freezes During Long-Running Operations**
+- **Symptoms**: GUI becomes unresponsive when processing many emails or large CSV exports
+- **Cause**: Heavy operations run on main thread
+- **Workaround**: Wait for operation to complete; consider running in headless mode
+- **Status**: 🟡 Could improve with better threading architecture
+
+### Security Considerations
+
+**Credential Storage**
+- 🔴 **Plaintext Storage**: `.env` file and `aha_auth.json` store credentials in plaintext
+- **Impact**: Anyone with file system access can read credentials
+- **Mitigation**: Set appropriate file permissions in Windows; use OS-level encryption or folder-level security
+- **Future**: Consider using Windows Credential Manager integration
+
+**Logging Sensitive Data**
+- ⚠️ **PII in Logs**: Log files may contain names, email addresses, and other PII
+- **Impact**: Privacy concerns if logs are shared or stored insecurely
+- **Mitigation**: Review and sanitize logs before sharing; implement log retention policy
+- **Future**: Add option to mask PII in logs
+
+**SFTP Password in Environment Variables**
+- 🔴 **Password Storage**: SFTP password stored in plaintext in `.env` file
+- **Impact**: Credentials exposed if `.env` file is compromised
+- **Mitigation**: Use SSH key authentication instead (not yet implemented); restrict file permissions
+- **Future**: Implement SSH key support
+
+### Compatibility & Dependencies
+
+**Python Version**
+- ✅ **Tested**: Python 3.14
+- ⚠️ **Minimum**: Python 3.8 (not extensively tested)
+- 🔴 **Not Supported**: Python 3.7 and below (missing required features)
+
+**Browser Automation**
+- ✅ **Supported**: Chromium (via Playwright)
+- 🔴 **Not Supported**: Firefox, Safari, Edge (could be added but not tested)
+
+**Email Providers**
+- ✅ **Supported**: Microsoft 365 / Outlook.com via Graph API
+- 🔴 **Not Supported**: Gmail, custom IMAP/POP3 servers
+
+### Performance Benchmarks
+
+Under typical usage conditions:
+- **Email Processing**: ~2-5 seconds per email (including parsing and Sheets update)
+- **AHA Registration**: ~30-60 seconds per student (depends on portal response time)
+- **Google Sheets Update**: ~0.5-2 seconds per row write
+- **Reminder Email Sending**: ~1-3 seconds per email
+- **CSV Generation**: ~5-15 seconds for sheets with 1,000-5,000 rows
+- **Auto-Flip Scan**: ~10-30 seconds for 100-500 records
+
+**Scalability Limits:**
+- Can reliably process ~500-1,000 emails per day
+- Google Sheets limited to ~10,000 students before performance issues
+- Concurrent registrations limited by browser automation (single-threaded)
+
+### Reporting Issues
+
+When reporting issues, please include:
+1. **Error Type**: Is it a bug, limitation, or enhancement request?
+2. **Steps to Reproduce**: Detailed steps to trigger the issue
+3. **Expected vs Actual**: What should happen vs what actually happens
+4. **Environment**: OS, Python version, relevant .env settings
+5. **Logs**: Relevant log excerpts (sanitize PII first)
+6. **Screenshots**: If GUI-related, include screenshots
+7. **Workaround Used**: If you found a temporary solution
+
+### Future Roadmap
+
+Issues planned to be addressed in future versions:
+- [ ] Add log rotation and automatic cleanup
+- [ ] Improve GUI responsiveness with better threading
+- [ ] Add SSH key support for SFTP
+- [ ] Implement optional PII masking in logs
+- [ ] Implement health check dashboard with alerting
+- [ ] Add multi-timezone support for international deployments
 
 ---
 
-**Last Updated**: May 2026  
-**Version**: 1.0  
-**Developed By**: CSC131 Team
+**Developed By**: Antranig Sameen, Sherri Tao, Nathan Kahahane (CSC131 Team 3: SentientGrok)
+**Project**: RQI Training Automation System (Automation Machine)
+
 
